@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="sv">
+<head>
+  <meta charset="utf-8" />
+  <title>Audio-analysator</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="header-row">
+    <h1>Audio-analysator</h1>
+    <button type="button" id="copy-btn" title="Kopiera all analysdata (utom råmanifestet) som text, t.ex. för att klistra in i en AI-tjänst" disabled>Kopiera analys</button>
+  </div>
+
+  <form id="analyze-form">
+    <input
+      type="url"
+      id="url-input"
+      placeholder="Klistra in din HLS-adress här, t.ex. https://exempel.se/stream/master.m3u8"
+      required
+    />
+    <button type="submit" id="analyze-btn">Analysera</button>
+  </form>
+
+  <p id="analyzed-url-info" hidden></p>
+  <p id="status"></p>
+
+  <div id="results"></div>
+
+  <script src="terms.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
