@@ -17,6 +17,7 @@
   "author": "Zakarias",
   "license": "MIT",
   "dependencies": {
-    "express": "^4.19.2"
+    "express": "^4.19.2",
+    "geoip-lite": "^2.0.3"
   }
 }

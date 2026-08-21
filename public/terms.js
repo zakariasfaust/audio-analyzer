@@ -41,6 +41,8 @@ const HLS_TERMS = {
     'Många CDN-noder namnges med en flygplatskod (t.ex. ARN för Stockholm Arlanda) följt av siffror. Det här är en ogranskad gissning baserad på det mönstret i nodnamnet - inte en bekräftad plats.',
   'dns-lookup':
     'Vilka IP-adresser värdnamnet pekar mot just nu, uppslaget av verktygets egen backend. CDN:er använder ofta DNS-baserad lastbalansering, så resultatet kan variera mellan anrop och är inte nödvändigtvis samma nod som svarade på HTTP-anropet.',
+  'ip-geo':
+    'Stad/land för varje IP, från en lokal offline-databas. Ett grovt komplement till hintan ovan - kan vara fel eller inaktuellt, särskilt för CDN-adresser.',
   'extra-headers':
     'Alla HTTP-headrar i svaret vars namn börjar med "x-" (en gammal konvention för icke-standardiserade headrar) eller innehåller "akamai". Ofta de mest talande för vad som hänt hos CDN:et, t.ex. om svaret kom från cache eller vilken server som svarade.',
 

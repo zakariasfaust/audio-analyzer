@@ -9,6 +9,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import dns from 'node:dns/promises';
+import geoip from 'geoip-lite';
 import { parseM3U8 } from './parser.js';
 
 export const TIMEOUT_MS = 10_000;
@@ -219,6 +220,27 @@ export function computeNetworkPath(allHeaders) {
 }
 
 /**
+ * Best-effort city/country lookup for a single IP address, from the local
+ * (offline, bundled) geoip-lite database - no external network call, but the
+ * database itself is a snapshot and can be stale, and is well-known to be
+ * inaccurate for CDN anycast addresses (which often geolocate to the CDN
+ * operator's registered address rather than the physical edge node). Shown
+ * as a separate, clearly-labelled complement to the header-based geoHint
+ * above, never as a replacement for it.
+ */
+function lookupIpGeo(ip) {
+  const result = geoip.lookup(ip);
+  if (!result) return null;
+  return {
+    ip,
+    country: result.country || null,
+    region: result.region || null,
+    city: result.city || null,
+    ll: result.ll || null,
+  };
+}
+
+/**
  * Looks up the IP addresses a hostname currently points to. Only one of several
  * possible nodes behind DNS-based load balancing - not necessarily
  * the same node that actually responded to the HTTP request we already made.
@@ -226,13 +248,13 @@ export function computeNetworkPath(allHeaders) {
 export async function resolveDnsAddresses(hostname) {
   try {
     const addresses = await dns.resolve4(hostname);
-    return { hostname, addresses, family: 4, error: null };
+    return { hostname, addresses, family: 4, error: null, ipGeo: addresses.map(lookupIpGeo) };
   } catch (err4) {
     try {
       const addresses6 = await dns.resolve6(hostname);
-      return { hostname, addresses: addresses6, family: 6, error: null };
+      return { hostname, addresses: addresses6, family: 6, error: null, ipGeo: addresses6.map(lookupIpGeo) };
     } catch {
-      return { hostname, addresses: [], family: null, error: err4.message };
+      return { hostname, addresses: [], family: null, error: err4.message, ipGeo: [] };
     }
   }
 }

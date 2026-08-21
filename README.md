@@ -57,6 +57,10 @@ There are no automated tests. Manual verification:
   "No ID3 metadata found" is shown - that's expected, not an error.
 - **Timeout** on all external HTTP calls and ffprobe runs is 10 seconds
   (`TIMEOUT_MS` in `server/analyzer.js`).
+- **IP-based geo estimate** on the network path card uses the bundled
+  `geoip-lite` database (offline, no external calls) - it's a rough,
+  unverified complement to the header-based hint, not a replacement, and
+  adds a fairly large dependency (~115 MB unpacked) to `npm install`.
 
 ## License
 

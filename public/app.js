@@ -376,6 +376,12 @@ function renderNetworkPath(np) {
     ? esc(dnsInfo.addresses.join(', '))
     : 'Inga adresser hittades';
 
+  const ipGeoResult = (dnsInfo.ipGeo || []).some((g) => g)
+    ? dnsInfo.ipGeo
+        .map((g, i) => `${esc(dnsInfo.addresses[i])}: ${g ? `${esc(g.city || '–')}, ${esc(g.country || '–')}` : 'okänd'}`)
+        .join('; ')
+    : 'Hittades inte';
+
   return `
     <section id="sec-network">
       ${withHint('h2', 'Nätverksväg', 'natverksvag')}
@@ -387,6 +393,7 @@ function renderNetworkPath(np) {
             : 'Hittades inte'
         }</dd>
         ${withHint('dt', 'DNS-uppslagning', 'dns-lookup')}<dd>${esc(dnsInfo.hostname) || '–'} → ${dnsResult}</dd>
+        ${withHint('dt', 'Geografisk uppskattning (IP-databas)', 'ip-geo')}<dd>${ipGeoResult} (ograskad, lokal databas - kan vara inaktuell eller fel för CDN-adresser)</dd>
       </dl>
       <p class="note">DNS-baserad lastbalansering kan ge olika svar mellan anrop - detta är inte nödvändigtvis samma nod som faktiskt svarade på HTTP-anropet i Anslutning-kortet.</p>
     </section>`;
@@ -538,6 +545,14 @@ function buildCopyText(data, sample, sampleError, variantsOverride) {
   add(
     `DNS-uppslagning (${dnsInfo.hostname || '–'}): ${
       dnsInfo.error ? `kunde inte slås upp (${dnsInfo.error})` : dnsInfo.addresses?.join(', ') || 'inga adresser'
+    }`
+  );
+  const ipGeoList = dnsInfo.ipGeo || [];
+  add(
+    `Geografisk uppskattning (IP-databas, ogranskad): ${
+      ipGeoList.some((g) => g)
+        ? ipGeoList.map((g, i) => `${dnsInfo.addresses[i]}: ${g ? `${g.city || '–'}, ${g.country || '–'}` : 'okänd'}`).join('; ')
+        : 'Hittades inte'
     }`
   );
   add('');
