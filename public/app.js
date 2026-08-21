@@ -160,7 +160,7 @@ function renderAudio(a) {
     </section>`;
 }
 
-function renderSegments(s, lowLatency, continuity) {
+function renderSegments(s, continuity) {
   return `
     <section id="sec-segments">
       ${withHint('h2', 'Segment och buffert', 'segment')}
@@ -176,7 +176,6 @@ function renderSegments(s, lowLatency, continuity) {
         ${withHint('dt', 'fMP4 (EXT-X-MAP)', 'fmp4')}<dd>${s.fmp4 ? 'Ja' : 'Nej'}</dd>
       </dl>
       ${renderContinuity(continuity)}
-      ${renderLowLatency(lowLatency)}
     </section>`;
 }
 
@@ -280,12 +279,13 @@ function renderLowLatency(ll) {
     </div>`;
 }
 
-function renderLatency(l) {
+function renderLatency(l, lowLatency) {
   if (!l.available) {
     return `
       <section id="sec-latency">
         ${withHint('h2', 'Latens', 'latens')}
         <p class="note">Latens kan inte beräknas (ingen PROGRAM-DATE-TIME-tidsstämpel i manifestet).</p>
+        ${renderLowLatency(lowLatency)}
       </section>`;
   }
   const methodLabel = l.method === 'measured' ? 'Uppmätt direkt' : 'Beräknad från segmentsumma';
@@ -299,6 +299,7 @@ function renderLatency(l) {
         ${withHint('dt', 'Fördröjning (från äldsta)', 'fordrojning-aldsta')}<dd>${fmtDuration(l.delaySecondsFromOldest)}</dd>
         ${withHint('dt', 'Fördröjning (från nyaste, live-kant)', 'fordrojning-nyaste')}<dd>${fmtDuration(l.delaySecondsFromNewest)}</dd>
       </dl>
+      ${renderLowLatency(lowLatency)}
     </section>`;
 }
 
@@ -524,28 +525,6 @@ function buildCopyText(data, sample, sampleError, variantsOverride) {
   add(`EXT-X-START: ${cont.startInfo ? `TIME-OFFSET=${cont.startInfo.timeOffset} - ${cont.startExplanation}` : 'Hittades inte.'}`);
   add('');
 
-  const ll = data.lowLatency;
-  add('LOW-LATENCY HLS');
-  if (!ll.present) {
-    add('Inga LL-HLS-taggar hittades i manifestet.');
-    if (ll.contradiction) {
-      add(`Motsägelse: headern ${ll.contradiction.header}: ${ll.contradiction.value} antyder LL-HLS-stöd, men inga LL-HLS-taggar hittades.`);
-    }
-  } else {
-    const sc = ll.serverControl;
-    add(`CAN-BLOCK-RELOAD: ${sc ? (sc.canBlockReload ? 'Ja' : 'Nej') : 'Hittades inte'}`);
-    add(`HOLD-BACK: ${sc && sc.holdBack !== null ? fmtDuration(sc.holdBack) : 'Hittades inte'}`);
-    add(`PART-HOLD-BACK: ${sc && sc.partHoldBack !== null ? fmtDuration(sc.partHoldBack) : 'Hittades inte'}`);
-    add(`CAN-SKIP-UNTIL: ${sc && sc.canSkipUntil !== null ? fmtDuration(sc.canSkipUntil) : 'Hittades inte'}`);
-    add(`CAN-SKIP-DATERANGES: ${sc ? (sc.canSkipDateranges ? 'Ja' : 'Nej') : 'Hittades inte'}`);
-    add(`PART-TARGET: ${ll.partTargetDuration ? fmtDuration(ll.partTargetDuration) : 'Hittades inte'}`);
-    add(`Delsegment i senaste segmentet: ${ll.lastSegmentParts.length || 'Hittades inte'}`);
-    if (ll.trailingParts.length) add(`Delsegment för nästa segment: ${ll.trailingParts.length}`);
-    add(`PRELOAD-HINT: ${ll.preloadHint ? `${ll.preloadHint.type}: ${ll.preloadHint.uri}` : 'Hittades inte'}`);
-    add(`RENDITION-REPORT: ${ll.renditionReports.length ? ll.renditionReports.map((r) => `${r.uri} (msn ${r.lastMsn}, part ${r.lastPart})`).join('; ') : 'Hittades inte'}`);
-  }
-  add('');
-
   const np = data.networkPath;
   add('NÄTVERKSVÄG');
   const npHeaders = Object.entries(np.headers || {});
@@ -574,6 +553,28 @@ function buildCopyText(data, sample, sampleError, variantsOverride) {
     add(`Fördröjning (från nyaste, live-kant): ${fmtDuration(l.delaySecondsFromNewest)}`);
   } else {
     add('Latens kan inte beräknas (ingen PROGRAM-DATE-TIME-tidsstämpel i manifestet).');
+  }
+  add('');
+
+  const ll = data.lowLatency;
+  add('LOW-LATENCY HLS');
+  if (!ll.present) {
+    add('Inga LL-HLS-taggar hittades i manifestet.');
+    if (ll.contradiction) {
+      add(`Motsägelse: headern ${ll.contradiction.header}: ${ll.contradiction.value} antyder LL-HLS-stöd, men inga LL-HLS-taggar hittades.`);
+    }
+  } else {
+    const sc = ll.serverControl;
+    add(`CAN-BLOCK-RELOAD: ${sc ? (sc.canBlockReload ? 'Ja' : 'Nej') : 'Hittades inte'}`);
+    add(`HOLD-BACK: ${sc && sc.holdBack !== null ? fmtDuration(sc.holdBack) : 'Hittades inte'}`);
+    add(`PART-HOLD-BACK: ${sc && sc.partHoldBack !== null ? fmtDuration(sc.partHoldBack) : 'Hittades inte'}`);
+    add(`CAN-SKIP-UNTIL: ${sc && sc.canSkipUntil !== null ? fmtDuration(sc.canSkipUntil) : 'Hittades inte'}`);
+    add(`CAN-SKIP-DATERANGES: ${sc ? (sc.canSkipDateranges ? 'Ja' : 'Nej') : 'Hittades inte'}`);
+    add(`PART-TARGET: ${ll.partTargetDuration ? fmtDuration(ll.partTargetDuration) : 'Hittades inte'}`);
+    add(`Delsegment i senaste segmentet: ${ll.lastSegmentParts.length || 'Hittades inte'}`);
+    if (ll.trailingParts.length) add(`Delsegment för nästa segment: ${ll.trailingParts.length}`);
+    add(`PRELOAD-HINT: ${ll.preloadHint ? `${ll.preloadHint.type}: ${ll.preloadHint.uri}` : 'Hittades inte'}`);
+    add(`RENDITION-REPORT: ${ll.renditionReports.length ? ll.renditionReports.map((r) => `${r.uri} (msn ${r.lastMsn}, part ${r.lastPart})`).join('; ') : 'Hittades inte'}`);
   }
   add('');
 
@@ -687,8 +688,8 @@ async function runAnalysis(targetUrl, { isVariantSwitch = false } = {}) {
     renderNetworkPath(data.networkPath) +
     renderVariants(baseVariantsInfo, currentAnalyzedUrl) +
     renderAudio(data.audio) +
-    renderSegments(data.segments, data.lowLatency, data.continuity) +
-    renderLatency(data.latency) +
+    renderSegments(data.segments, data.continuity) +
+    renderLatency(data.latency, data.lowLatency) +
     renderBitrate(data.bitrate) +
     renderId3Placeholder() +
     renderManifests(data.manifests);
