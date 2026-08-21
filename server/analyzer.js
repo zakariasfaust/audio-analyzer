@@ -14,7 +14,7 @@ import { parseM3U8 } from './parser.js';
 export const TIMEOUT_MS = 10_000;
 export const USER_AGENT =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
-  '(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Audio-Analysator/1.0';
+  '(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Audio-Analyzer/1.0';
 
 // ---------------------------------------------------------------------------
 // Error classes - each carries enough information for index.js to be able
@@ -592,7 +592,7 @@ export async function runFfprobe(url) {
  */
 export async function sampleStream(url, requestedSeconds = 8) {
   const secs = Math.min(30, Math.max(1, Number(requestedSeconds) || 8));
-  const tempFile = path.join(os.tmpdir(), `audio-analysator-${randomUUID()}.ts`);
+  const tempFile = path.join(os.tmpdir(), `audio-analyzer-${randomUUID()}.ts`);
 
   const ffmpegArgs = [
     '-y',

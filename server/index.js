@@ -179,7 +179,7 @@ app.use('/api', (req, res) => {
 });
 
 app.listen(PORT, HOST, async () => {
-  console.log(`Audio-analysator körs på http://${HOST}:${PORT}`);
+  console.log(`Audio-analyzer körs på http://${HOST}:${PORT}`);
 
   const [hasFfmpeg, hasFfprobe] = await Promise.all([
     checkBinaryAvailable('ffmpeg'),
