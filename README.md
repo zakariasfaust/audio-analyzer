@@ -1,4 +1,4 @@
-# Audio-analysator
+# Audio Analyzer
 
 Ett litet lokalt verktyg för att analysera ljudströmmar (just nu HLS/`.m3u8`)
 och ljudfiler - särskilt tänkt för radioströmmar bakom CDN:er som Akamai.
@@ -57,3 +57,7 @@ Inga automatiserade tester finns. Manuell verifiering:
   "Ingen ID3-metadata hittades" - det är förväntat, inte ett fel.
 - **Timeout** på alla externa HTTP-anrop och ffprobe-körningar är 10 sekunder
   (`TIMEOUT_MS` i `server/analyzer.js`).
+
+## Licens
+
+[MIT](LICENSE)
