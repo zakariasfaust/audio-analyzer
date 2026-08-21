@@ -172,8 +172,8 @@ function renderSegments(s, continuity) {
         ${withHint('dt', 'Antal segment i fönstret', 'antal-segment')}<dd>${s.segmentCount}</dd>
         ${withHint('dt', 'Fönsterlängd', 'fonsterlangd')}<dd>${fmtDuration(s.windowSeconds)}</dd>
         ${withHint('dt', 'Snittlängd/segment', 'snittlangd')}<dd>${fmtDuration(s.avgSegmentDuration)}</dd>
-        ${withHint('dt', 'Krypterat', 'krypterat')}<dd>${s.encrypted ? `Ja (${esc(s.keyMethod)})` : 'Nej'}</dd>
-        ${withHint('dt', 'fMP4 (EXT-X-MAP)', 'fmp4')}<dd>${s.fmp4 ? 'Ja' : 'Nej'}</dd>
+        ${withHint('dt', 'Kryptering', 'krypterat')}<dd>${s.encrypted ? esc(s.keyMethod) : 'Av'}</dd>
+        ${withHint('dt', 'Segmentformat', 'fmp4')}<dd>${s.fmp4 ? 'Fragmenterad MP4 (fMP4)' : 'Ej fragmenterat (MPEG-TS)'}</dd>
       </dl>
       ${renderContinuity(continuity)}
     </section>`;
@@ -510,8 +510,8 @@ function buildCopyText(data, sample, sampleError, variantsOverride) {
   add(`Antal segment i fönstret: ${s.segmentCount}`);
   add(`Fönsterlängd: ${fmtDuration(s.windowSeconds)}`);
   add(`Snittlängd/segment: ${fmtDuration(s.avgSegmentDuration)}`);
-  add(`Krypterat: ${s.encrypted ? `Ja (${s.keyMethod})` : 'Nej'}`);
-  add(`fMP4 (EXT-X-MAP): ${s.fmp4 ? 'Ja' : 'Nej'}`);
+  add(`Kryptering: ${s.encrypted ? s.keyMethod : 'Av'}`);
+  add(`Segmentformat: ${s.fmp4 ? 'Fragmenterad MP4 (fMP4)' : 'Ej fragmenterat (MPEG-TS)'}`);
   add('');
 
   const cont = data.continuity;
