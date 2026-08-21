@@ -1,7 +1,7 @@
 // index.js
-// Express-app: statiska frontend-filer + JSON-API som proxar mot CDN:er
-// och kör ffprobe/ffmpeg. Lyssnar uttryckligen på 127.0.0.1 - det här
-// verktyget är avsett att köras lokalt, inte exponeras på nätverket.
+// Express app: static frontend files + JSON API that proxies to CDNs
+// and runs ffprobe/ffmpeg. Explicitly listens on 127.0.0.1 - this
+// tool is meant to run locally, not be exposed on the network.
 
 import express from 'express';
 import path from 'node:path';
@@ -32,8 +32,8 @@ app.use(express.json());
 app.use(express.static(PUBLIC_DIR));
 
 // -----------------------------------------------------------------------
-// Felsvar: mappar våra egna felklasser (se analyzer.js) till HTTP-status
-// och ett enhetligt, svenskt JSON-felformat som frontend kan visa direkt.
+// Error responses: maps our own error classes (see analyzer.js) to HTTP status
+// codes and a uniform JSON error format that the frontend can display directly.
 // -----------------------------------------------------------------------
 
 const STATUS_BY_CODE = {
@@ -61,7 +61,7 @@ function sendError(res, err) {
 }
 
 // -----------------------------------------------------------------------
-// API-routes
+// API routes
 // -----------------------------------------------------------------------
 
 app.post('/api/analyze', async (req, res) => {
@@ -109,9 +109,9 @@ app.get('/api/sample', async (req, res) => {
   }
 });
 
-// Genomsläpp av manifest och segment till hls.js i webbläsaren. CDN:en
-// nekar CORS för sina egna svar, men vårt eget /api/proxy-svar körs på
-// samma origin som sidan - så webbläsaren har inga invändningar.
+// Pass-through of manifest and segments to hls.js in the browser. The CDN
+// denies CORS for its own responses, but our own /api/proxy response is served on
+// the same origin as the page - so the browser has no objections.
 app.get('/api/proxy', async (req, res) => {
   let target;
   try {

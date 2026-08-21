@@ -1,7 +1,7 @@
 // app.js
-// Vanilla JS - inget bygge, ingen import/export. Körs direkt i webbläsaren.
-// Klick på Analysera: POST /api/analyze (nulägesbild) följt av
-// GET /api/sample (ID3/"nu spelas") - resultatet renderas i #results.
+// Vanilla JS - no build step, no import/export. Runs directly in the browser.
+// Clicking Analyze: POST /api/analyze (status snapshot) followed by
+// GET /api/sample (ID3/"now playing") - the result is rendered into #results.
 
 const form = document.getElementById('analyze-form');
 const urlInput = document.getElementById('url-input');
@@ -10,15 +10,16 @@ const statusEl = document.getElementById('status');
 const resultsEl = document.getElementById('results');
 const copyBtn = document.getElementById('copy-btn');
 
-// Senaste analysresultatet - hålls i minnet så Kopiera-knappen kan bygga
-// textutdraget utan att göra om några nätverksanrop.
+// Latest analysis result - kept in memory so the Copy button can build
+// the text excerpt without redoing any network requests.
 let lastAnalyzeData = null;
 let lastSampleData = null;
 let lastSampleError = null;
 
 // ---------------------------------------------------------------------
-// Formattering: svensk standard (decimalkomma, mellanslag som
-// tusentalsavgränsare, ÅÅÅÅ-MM-DD TT:MM:SS) - gör siffrorna läsbara.
+// Formatting: Swedish convention (decimal comma, space as
+// thousands separator, YYYY-MM-DD HH:MM:SS) - keeps the numbers readable
+// for the (Swedish-speaking) audience the UI targets.
 // ---------------------------------------------------------------------
 
 function esc(value) {
@@ -41,8 +42,8 @@ function fmtInt(n) {
   return Math.round(n).toLocaleString('sv-SE');
 }
 
-// Sekunder som "12,3 s" under en minut, annars "X min Y s" eller "X h Y min"
-// - så stora fördröjnings-/längdvärden (t.ex. 10 000 s) blir lätta att läsa.
+// Seconds as "12,3 s" under a minute, otherwise "X min Y s" or "X h Y min"
+// - so large delay/duration values (e.g. 10 000 s) stay easy to read.
 function fmtDuration(totalSeconds, decimals = 1) {
   if (totalSeconds === null || totalSeconds === undefined || Number.isNaN(totalSeconds)) return '–';
   const sign = totalSeconds < 0 ? '-' : '';
@@ -63,8 +64,8 @@ function fmtDateTime(iso) {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
-// Rubrik/värdenamn med hover-förklaring från HLS_TERMS (terms.js), som
-// native title-tooltip. Element utan matchande nyckel får ingen title-attribut.
+// Heading/value name with a hover explanation from HLS_TERMS (terms.js), as a
+// native title tooltip. Elements without a matching key get no title attribute.
 function withHint(tag, label, key) {
   const text = HLS_TERMS[key];
   const titleAttr = text ? ` title="${esc(text)}"` : '';
@@ -72,8 +73,8 @@ function withHint(tag, label, key) {
 }
 
 // ---------------------------------------------------------------------
-// Rendering - en funktion per sektion. Bygger HTML-strängar med esc()
-// runt allt som kommer från extern källa (headers, manifesttext, URL:er).
+// Rendering - one function per section. Builds HTML strings with esc()
+// around everything that comes from an external source (headers, manifest text, URLs).
 // ---------------------------------------------------------------------
 
 function renderConnection(c) {
@@ -179,9 +180,9 @@ function renderSegments(s, lowLatency, continuity) {
     </section>`;
 }
 
-// "Kontinuitet och startpunkt"-underavsnitt: EXT-X-DISCONTINUITY-SEQUENCE,
-// var EXT-X-DISCONTINUITY faktiskt sitter (som absoluta sekvensnummer),
-// och EXT-X-START omräknat till en läsbar mening.
+// "Continuity and start point" subsection: EXT-X-DISCONTINUITY-SEQUENCE,
+// where EXT-X-DISCONTINUITY actually sits (as absolute sequence numbers),
+// and EXT-X-START converted into a readable sentence.
 function renderContinuity(c) {
   const discontinuityLine =
     c.discontinuityCount === 0
@@ -205,11 +206,11 @@ function renderContinuity(c) {
     </div>`;
 }
 
-// "Low-Latency HLS"-underavsnitt: EXT-X-SERVER-CONTROL, EXT-X-PART-INF,
-// EXT-X-PART, EXT-X-PRELOAD-HINT, EXT-X-RENDITION-REPORT. Visar "Hittades
-// inte" per fält istället för att dölja rader - och flaggar den intressanta
-// motsägelsen om CDN:et signalerar LL-HLS (t.ex. Akamais x-llhls-blocked:
-// false) men manifestet självt saknar alla taggarna.
+// "Low-Latency HLS" subsection: EXT-X-SERVER-CONTROL, EXT-X-PART-INF,
+// EXT-X-PART, EXT-X-PRELOAD-HINT, EXT-X-RENDITION-REPORT. Shows "Not
+// found" per field instead of hiding rows - and flags the interesting
+// contradiction if the CDN signals LL-HLS (e.g. Akamai's x-llhls-blocked:
+// false) but the manifest itself lacks all the tags.
 function renderLowLatency(ll) {
   const contradictionNote = ll.contradiction
     ? `<p class="note error">Motsägelse: CDN-headern <code>${esc(ll.contradiction.header)}: ${esc(
@@ -356,9 +357,9 @@ function renderId3(sample, error) {
     </table>`;
 }
 
-// "Nätverksväg": generiskt matchade CDN-/edge-routing-headrar, en
-// bäst-ansträngning-gissning på geografisk ledtråd i nodnamnet, och en
-// server-side DNS-uppslagning av media-playlistans värdnamn.
+// "Network path": generically matched CDN/edge routing headers, a
+// best-effort guess at a geographic hint in the node name, and a
+// server-side DNS lookup of the media playlist's hostname.
 function renderNetworkPath(np) {
   const headerRows = Object.entries(np.headers || {});
   const headerTable = headerRows.length
@@ -438,9 +439,9 @@ function renderFatalError(err) {
 }
 
 // ---------------------------------------------------------------------
-// Textutdrag för Kopiera-knappen - samma data som renderas på sidan,
-// men som ren text utan råmanifestet (som bara är en lång segmentlista
-// och inte tillför något för en AI-analys av strömmens egenskaper).
+// Text excerpt for the Copy button - the same data that's rendered on the
+// page, but as plain text without the raw manifest (which is just a long
+// segment list and adds nothing for an AI analysis of the stream's properties).
 // ---------------------------------------------------------------------
 
 function buildCopyText(data, sample, sampleError, variantsOverride) {
@@ -620,18 +621,18 @@ function buildCopyText(data, sample, sampleError, variantsOverride) {
 }
 
 // ---------------------------------------------------------------------
-// Huvudflöde: analysera-knappen kör /api/analyze och sedan /api/sample
-// i följd, och renderar allt i #results. Klick på en variantrad (se
-// renderVariants) kör om samma kedja mot variantens egen URL, utan att
-// röra huvud-URL-fältet - se variantklick-hanteraren längst ned.
+// Main flow: the Analyze button runs /api/analyze and then /api/sample
+// in sequence, and renders everything into #results. Clicking a variant row (see
+// renderVariants) reruns the same chain against the variant's own URL, without
+// touching the main URL field - see the variant click handler at the bottom.
 // ---------------------------------------------------------------------
 
 const analyzedUrlInfoEl = document.getElementById('analyzed-url-info');
 
-// currentMasterUrl = URL:en användaren skrivit in och klickat Analysera på.
-// baseVariantsInfo = variantlistan från DEN analysen - visas oförändrad i
-// Varianter-kortet även när en enskild variant är omanalyserad, eftersom
-// en variants egen media-playlist inte har någon egen variantlista.
+// currentMasterUrl = the URL the user typed in and clicked Analyze on.
+// baseVariantsInfo = the variant list from THAT analysis - shown unchanged in
+// the Variants card even when a single variant has been re-analyzed, since
+// a variant's own media playlist has no variant list of its own.
 let currentMasterUrl = null;
 let currentAnalyzedUrl = null;
 let baseVariantsInfo = null;
@@ -730,8 +731,8 @@ form.addEventListener('submit', (event) => {
   runAnalysis(url, { isVariantSwitch: false });
 });
 
-// Klick på en variantrad i Varianter-tabellen (se renderVariants) - kör om
-// analysen mot just den variantens URL, men rör inte huvud-URL-fältet.
+// Clicking a variant row in the Variants table (see renderVariants) - reruns
+// the analysis against that specific variant's URL, but doesn't touch the main URL field.
 resultsEl.addEventListener('click', (event) => {
   const row = event.target.closest('tr[data-variant-url]');
   if (!row) return;

@@ -1,13 +1,13 @@
 // parser.js
-// Tolkar M3U8-text (HLS-manifest) till JavaScript-objekt.
-// Ingen extern parser-bibliotek används - HLS-formatet är radbaserat
-// och enkelt nog att tolka med enkla regex och tillståndsvariabler.
+// Parses M3U8 text (HLS manifest) into JavaScript objects.
+// No external parser library is used - the HLS format is line-based
+// and simple enough to parse with plain regex and state variables.
 
 /**
- * Löser en (eventuellt relativ) URI mot manifestets egen URL.
- * HLS-manifest innehåller ofta relativa segment-URI:er
- * ("segment_123.ts") som måste slås ihop med manifestets bas-URL
- * för att bli klickbara/hämtningsbara.
+ * Resolves a (possibly relative) URI against the manifest's own URL.
+ * HLS manifests often contain relative segment URIs
+ * ("segment_123.ts") that must be joined with the manifest's base URL
+ * to become clickable/fetchable.
  */
 function resolveUrl(baseUrl, uri) {
   if (!uri) return uri;
@@ -19,17 +19,17 @@ function resolveUrl(baseUrl, uri) {
 }
 
 /**
- * Tolkar en attributlista av typen KEY=VALUE,KEY2="VALUE 2",KEY3=1920x1080
- * som förekommer efter t.ex. #EXT-X-STREAM-INF:. Måste hantera citerade
- * strängar där kommatecken INTE ska tolkas som separator (t.ex. CODECS).
+ * Parses an attribute list of the form KEY=VALUE,KEY2="VALUE 2",KEY3=1920x1080
+ * as found after e.g. #EXT-X-STREAM-INF:. Must handle quoted
+ * strings where commas should NOT be interpreted as a separator (e.g. CODECS).
  */
 function parseAttributeList(str) {
   const attrs = {};
   if (!str) return attrs;
 
-  // Matchar KEY=VÄRDE där värdet antingen är citerat ("...") eller ociterat
-  // fram till nästa komma. Detta undviker att splitta CODECS="mp4a.40.2,avc1.4d401f"
-  // på fel ställe.
+  // Matches KEY=VALUE where the value is either quoted ("...") or unquoted
+  // up to the next comma. This avoids splitting CODECS="mp4a.40.2,avc1.4d401f"
+  // in the wrong place.
   const re = /([A-Z0-9-]+)=(?:"([^"]*)"|([^,]*))/g;
   let match;
   while ((match = re.exec(str)) !== null) {
@@ -41,8 +41,8 @@ function parseAttributeList(str) {
 }
 
 /**
- * Delar upp en enda #EXT-X-KEY: eller #EXT-X-MAP: -tagg-rad i sina attribut
- * och löser eventuell URI mot bas-URL:en.
+ * Splits a single #EXT-X-KEY: or #EXT-X-MAP: tag line into its attributes
+ * and resolves any URI against the base URL.
  */
 function parseUriTag(line, baseUrl) {
   const colonIndex = line.indexOf(':');
@@ -57,7 +57,7 @@ function parseUriTag(line, baseUrl) {
 }
 
 /**
- * Tolkar en master-playlist (den som listar #EXT-X-STREAM-INF-varianter).
+ * Parses a master playlist (the one listing #EXT-X-STREAM-INF variants).
  */
 function parseMasterPlaylist(lines, baseUrl) {
   const variants = [];
@@ -89,7 +89,7 @@ function parseMasterPlaylist(lines, baseUrl) {
 
     if (line.startsWith('#EXT-X-STREAM-INF:')) {
       const attrs = parseAttributeList(line.slice('#EXT-X-STREAM-INF:'.length));
-      // Nästa icke-tomma, icke-kommentar-rad är variantens URI.
+      // The next non-empty, non-comment line is the variant's URI.
       let j = i + 1;
       while (j < lines.length && (lines[j] === '' || lines[j].startsWith('#'))) j++;
       const uriLine = j < lines.length ? lines[j] : null;
@@ -104,7 +104,7 @@ function parseMasterPlaylist(lines, baseUrl) {
         url: uriLine ? resolveUrl(baseUrl, uriLine) : null,
       });
 
-      i = j; // hoppa förbi URI-raden vi redan konsumerat
+      i = j; // skip past the URI line we've already consumed
       continue;
     }
   }
@@ -113,7 +113,7 @@ function parseMasterPlaylist(lines, baseUrl) {
 }
 
 /**
- * Tolkar en media-playlist (den som listar faktiska segment via #EXTINF).
+ * Parses a media playlist (the one listing actual segments via #EXTINF).
  */
 function parseMediaPlaylist(lines, baseUrl) {
   let version = null;
@@ -121,24 +121,24 @@ function parseMediaPlaylist(lines, baseUrl) {
   let mediaSequence = null;
   let playlistType = null;
   let endlist = false;
-  let key = null; // senaste aktiva krypteringsnyckel (METHOD != NONE)
-  let map = null; // #EXT-X-MAP (fMP4-initieringssegment)
-  let serverControl = null; // #EXT-X-SERVER-CONTROL (rekommenderad livekant-distans m.m.)
-  let partTargetDuration = null; // #EXT-X-PART-INF:PART-TARGET (LL-HLS del-segmentlängd)
-  let preloadHint = null; // #EXT-X-PRELOAD-HINT (kommande del-segment som redan annonseras)
-  const renditionReports = []; // #EXT-X-RENDITION-REPORT (status för andra renditions)
-  let discontinuitySequence = null; // #EXT-X-DISCONTINUITY-SEQUENCE (startvärde för discontinuity-räknaren)
-  let startInfo = null; // #EXT-X-START (TIME-OFFSET för var spelaren ska börja)
+  let key = null; // most recent active encryption key (METHOD != NONE)
+  let map = null; // #EXT-X-MAP (fMP4 initialization segment)
+  let serverControl = null; // #EXT-X-SERVER-CONTROL (recommended live-edge distance etc.)
+  let partTargetDuration = null; // #EXT-X-PART-INF:PART-TARGET (LL-HLS partial segment duration)
+  let preloadHint = null; // #EXT-X-PRELOAD-HINT (upcoming partial segment already being advertised)
+  const renditionReports = []; // #EXT-X-RENDITION-REPORT (status of other renditions)
+  let discontinuitySequence = null; // #EXT-X-DISCONTINUITY-SEQUENCE (starting value for the discontinuity counter)
+  let startInfo = null; // #EXT-X-START (TIME-OFFSET for where the player should start)
 
   const segments = [];
 
-  // "Pending"-värden: HLS-taggar gäller för nästa segment-URI-rad,
-  // så vi samlar dem tills vi stöter på raden som inte börjar med '#'.
+  // "Pending" values: HLS tags apply to the next segment URI line,
+  // so we collect them until we hit the line that doesn't start with '#'.
   let pendingDuration = null;
   let pendingTitle = '';
   let pendingProgramDateTime = null;
   let pendingDiscontinuity = false;
-  let pendingParts = []; // #EXT-X-PART (LL-HLS del-segment) för nästa segment
+  let pendingParts = []; // #EXT-X-PART (LL-HLS partial segment) for the next segment
 
   for (const line of lines) {
     if (line.startsWith('#EXT-X-VERSION:')) {
@@ -192,8 +192,8 @@ function parseMediaPlaylist(lines, baseUrl) {
         lastPart: attrs['LAST-PART'] ? Number(attrs['LAST-PART']) : null,
       });
     } else if (line.startsWith('#EXT-X-DISCONTINUITY-SEQUENCE:')) {
-      // Måste testas FÖRE '#EXT-X-DISCONTINUITY' nedan - annars matchar
-      // den generiska prefix-koll felaktigt även den här längre taggen.
+      // Must be tested BEFORE '#EXT-X-DISCONTINUITY' below - otherwise
+      // the generic prefix check would incorrectly match this longer tag too.
       discontinuitySequence = Number(line.slice('#EXT-X-DISCONTINUITY-SEQUENCE:'.length));
       if (Number.isNaN(discontinuitySequence)) discontinuitySequence = null;
     } else if (line.startsWith('#EXT-X-START:')) {
@@ -213,7 +213,7 @@ function parseMediaPlaylist(lines, baseUrl) {
         pendingTitle = m[2] || '';
       }
     } else if (!line.startsWith('#') && line !== '') {
-      // Detta är segmentets URI - fäll ihop alla "pending"-värden till ett segment.
+      // This is the segment's URI - collapse all "pending" values into one segment.
       segments.push({
         uri: resolveUrl(baseUrl, line),
         duration: pendingDuration,
@@ -230,8 +230,8 @@ function parseMediaPlaylist(lines, baseUrl) {
     }
   }
 
-  // EXT-X-PART-taggar för det segment som ännu inte hunnit bli klart (inget
-  // EXTINF/URI-rad än) - typiskt de allra sista raderna i en LL-HLS-playlist.
+  // EXT-X-PART tags for the segment that hasn't finished yet (no
+  // EXTINF/URI line yet) - typically the very last lines in an LL-HLS playlist.
   const trailingParts = pendingParts;
 
   return {
@@ -255,10 +255,10 @@ function parseMediaPlaylist(lines, baseUrl) {
 }
 
 /**
- * Huvudfunktion: avgör om texten är en master- eller media-playlist
- * och delegerar till rätt tolkare. Radio-strömmar saknar ofta en separat
- * master-playlist - URL:en pekar då direkt på media-playlistan, vilket
- * är fullt normalt och inte ett fel.
+ * Main function: determines whether the text is a master or media playlist
+ * and delegates to the right parser. Radio streams often lack a separate
+ * master playlist - the URL then points directly at the media playlist, which
+ * is completely normal and not an error.
  */
 export function parseM3U8(text, baseUrl) {
   const lines = text
@@ -271,15 +271,15 @@ export function parseM3U8(text, baseUrl) {
   if (isMaster) return parseMasterPlaylist(lines, baseUrl);
   if (isMedia) return parseMediaPlaylist(lines, baseUrl);
 
-  // Varken variant-taggar eller segment-taggar hittades.
+  // Neither variant tags nor segment tags were found.
   return { type: 'unknown', version: null };
 }
 
 /**
- * Skriver om alla URI:er i en manifesttext så att de pekar tillbaka på
- * vår egen proxy (/api/proxy?url=...). Används av /api/proxy för att
- * hls.js ska kunna spela upp strömmen trots CORS-blockering hos CDN:en -
- * varje segment- och nyckel-URI måste gå via samma proxy som manifestet.
+ * Rewrites all URIs in a manifest text so they point back at
+ * our own proxy (/api/proxy?url=...). Used by /api/proxy so that
+ * hls.js can play the stream despite CORS blocking on the CDN's part -
+ * every segment and key URI must go through the same proxy as the manifest.
  */
 export function rewriteManifestForProxy(text, baseUrl, proxyPath = '/api/proxy') {
   const toProxyUrl = (uri) => {
@@ -290,7 +290,7 @@ export function rewriteManifestForProxy(text, baseUrl, proxyPath = '/api/proxy')
   const lines = text.split(/\r?\n/).map((rawLine) => {
     const line = rawLine.trim();
 
-    // Taggar som bär en URI="..." -attribut (kryptering, fMP4-init, alternativa ljudspår).
+    // Tags that carry a URI="..." attribute (encryption, fMP4 init, alternate audio tracks).
     if (
       line.startsWith('#EXT-X-KEY:') ||
       line.startsWith('#EXT-X-MAP:') ||
@@ -299,7 +299,7 @@ export function rewriteManifestForProxy(text, baseUrl, proxyPath = '/api/proxy')
       return line.replace(/URI="([^"]*)"/, (_match, uri) => `URI="${toProxyUrl(uri)}"`);
     }
 
-    // Vanliga segment-/variant-URI-rader (allt som inte är kommentar eller tomt).
+    // Regular segment/variant URI lines (anything that isn't a comment or empty).
     if (line !== '' && !line.startsWith('#')) {
       return toProxyUrl(line);
     }

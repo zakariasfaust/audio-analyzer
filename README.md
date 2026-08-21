@@ -1,63 +1,63 @@
 # Audio Analyzer
 
-Ett litet lokalt verktyg för att analysera ljudströmmar (just nu HLS/`.m3u8`)
-och ljudfiler - särskilt tänkt för radioströmmar bakom CDN:er som Akamai.
-Klistra in en manifest-URL och få en samlad nulägesbild: anslutning/CORS,
-varianter, ljudkodek, segment och buffert, latens, uppmätt bitrate,
-"nu spelas"-ID3 och råmanifestet.
+A small local tool for analyzing audio streams (currently HLS/`.m3u8`)
+and audio files - designed especially for radio streams behind CDNs like Akamai.
+Paste in a manifest URL and get a combined status snapshot: connection/CORS,
+variants, audio codec, segments and buffer, latency, measured bitrate,
+"now playing" ID3, and the raw manifest.
 
-## Varför en backend?
+## Why a backend?
 
-De flesta CDN:er (t.ex. Akamai) skickar inte CORS-headers på sina manifest,
-så `fetch()` direkt från webbläsaren blockeras. Verktyget behöver också
-`ffprobe`/`ffmpeg`, som är binärer och inte kan köras i webbläsaren. Därför
-finns en Node/Express-backend som proxar HTTP-anropen och kör ffprobe/ffmpeg
-som barnprocesser. Frontend är ren HTML/CSS/JS utan bygge eller ramverk.
+Most CDNs (e.g. Akamai) don't send CORS headers on their manifests,
+so `fetch()` directly from the browser is blocked. The tool also needs
+`ffprobe`/`ffmpeg`, which are binaries and can't run in the browser. That's why
+there's a Node/Express backend that proxies the HTTP calls and runs ffprobe/ffmpeg
+as child processes. The frontend is plain HTML/CSS/JS with no build step or framework.
 
-## Förutsättningar
+## Prerequisites
 
-- Node.js 18 eller senare
-- `ffmpeg` (inkl. `ffprobe`) installerat och tillgängligt i PATH
+- Node.js 18 or later
+- `ffmpeg` (including `ffprobe`) installed and available in PATH
   - macOS: `brew install ffmpeg`
-  - Linux: `sudo apt install ffmpeg` (eller `sudo dnf install ffmpeg`)
+  - Linux: `sudo apt install ffmpeg` (or `sudo dnf install ffmpeg`)
   - Windows: `winget install Gyan.FFmpeg`
 
-Saknas ffmpeg/ffprobe startar servern ändå, men ljud-/buffert-/
-inspelningsanalysen misslyckas (manifestanalysen fungerar som vanligt).
+If ffmpeg/ffprobe is missing, the server still starts, but the audio/buffer/
+recording analysis will fail (manifest analysis works as usual).
 
-## Installation och körning
+## Installation and running
 
 ```bash
 npm install
 npm start
 ```
 
-Servern binder uttryckligen till `127.0.0.1` (inte `0.0.0.0`) och lyssnar på
-port `8877` som standard (override med `PORT=xxxx npm start`). Öppna
-`http://127.0.0.1:8877/` i webbläsaren, klistra in en `.m3u8`-URL och klicka
-Analysera.
+The server explicitly binds to `127.0.0.1` (not `0.0.0.0`) and listens on
+port `8877` by default (override with `PORT=xxxx npm start`). Open
+`http://127.0.0.1:8877/` in your browser, paste in a `.m3u8` URL, and click
+Analyze.
 
-## Testa
+## Testing
 
-Inga automatiserade tester finns. Manuell verifiering:
-1. `npm start`, öppna sidan, klicka Analysera på den förifyllda exempel-URL:en.
-2. Testa ett felfall genom att klistra in en URL som ger 404 eller pekar på
-   en sida som inte är en M3U8 - felet ska visas läsbart, sidan ska aldrig
-   bli tom.
+There are no automated tests. Manual verification:
+1. `npm start`, open the page, click Analyze on the prefilled example URL.
+2. Test a failure case by pasting in a URL that returns 404 or points to
+   a page that isn't an M3U8 - the error should display readably, the page should never
+   go blank.
 
-## Att känna till
+## Good to know
 
-- **Nulägesbild, inte live** - varje klick på Analysera gör ett nytt anrop.
-  Sidan pollar inte och uppdaterar sig inte automatiskt.
-- **"Endast en variant"** - många radioströmmar saknar en separat
-  master-playlist; URL:en pekar då direkt på media-playlistan. Det flaggas
-  i gränssnittet istället för att visa en tom varianttabell.
-- **ID3/"Nu spelas" är bäst-ansträngning** - kräver att strömmen faktiskt
-  bär timed metadata i segmenten. Många strömmar gör inte det, och då visas
-  "Ingen ID3-metadata hittades" - det är förväntat, inte ett fel.
-- **Timeout** på alla externa HTTP-anrop och ffprobe-körningar är 10 sekunder
-  (`TIMEOUT_MS` i `server/analyzer.js`).
+- **Status snapshot, not live** - each click on Analyze makes a new request.
+  The page doesn't poll or update automatically.
+- **"Only one variant"** - many radio streams lack a separate
+  master playlist; the URL then points directly at the media playlist. This is flagged
+  in the UI instead of showing an empty variant table.
+- **ID3/"Now playing" is best-effort** - requires the stream to actually
+  carry timed metadata in the segments. Many streams don't, in which case
+  "No ID3 metadata found" is shown - that's expected, not an error.
+- **Timeout** on all external HTTP calls and ffprobe runs is 10 seconds
+  (`TIMEOUT_MS` in `server/analyzer.js`).
 
-## Licens
+## License
 
 [MIT](LICENSE)

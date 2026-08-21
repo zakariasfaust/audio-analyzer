@@ -1,7 +1,7 @@
 // analyzer.js
-// All logik för att hämta, tolka och mäta en HLS-ström:
-// HTTP-anrop mot CDN:en, körning av ffprobe/ffmpeg som barnprocesser,
-// samt sammanställning av de data som frontend visar per kort.
+// All logic for fetching, parsing and measuring an HLS stream:
+// HTTP requests to the CDN, running ffprobe/ffmpeg as child processes,
+// and assembling the data the frontend displays per card.
 
 import { spawn } from 'node:child_process';
 import { promises as fs } from 'node:fs';
@@ -17,8 +17,8 @@ export const USER_AGENT =
   '(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Audio-Analysator/1.0';
 
 // ---------------------------------------------------------------------------
-// Felklasser - varje bär tillräckligt med information för att index.js ska
-// kunna svara med ett begripligt, svenskt felmeddelande utan att gissa.
+// Error classes - each carries enough information for index.js to be able
+// to respond with a clear error message without having to guess.
 // ---------------------------------------------------------------------------
 
 export class AppError extends Error {
@@ -87,7 +87,7 @@ export class ValidationError extends AppError {
 }
 
 // ---------------------------------------------------------------------------
-// URL-validering
+// URL validation
 // ---------------------------------------------------------------------------
 
 export function validateUrl(raw) {
@@ -107,7 +107,7 @@ export function validateUrl(raw) {
 }
 
 // ---------------------------------------------------------------------------
-// HTTP-hämtning med timeout och realistisk User-Agent
+// HTTP fetching with timeout and a realistic User-Agent
 // ---------------------------------------------------------------------------
 
 async function fetchWithTimeout(url, options = {}) {
@@ -141,12 +141,12 @@ function headersToObject(headers) {
 }
 
 /**
- * Hämtar enbart HTTP-headrar för en URL (för /api/headers och anslutningskortet).
- * Läser aldrig ut hela kroppen i onödan.
+ * Fetches only the HTTP headers for a URL (for /api/headers and the connection card).
+ * Never reads out the whole body unnecessarily.
  */
 export async function fetchHeaders(url) {
   const response = await fetchWithTimeout(url, { method: 'GET' });
-  // Vi vill inte hålla kvar en öppen socket bara för headrarnas skull.
+  // We don't want to keep an open socket alive just for the headers' sake.
   await response.body?.cancel().catch(() => {});
 
   const headers = headersToObject(response.headers);
@@ -180,18 +180,18 @@ export async function fetchHeaders(url) {
   };
 }
 
-// Generiska mönster för headrar som avslöjar vilken CDN-nod/edge-server som
-// svarade - täcker Akamai, Cloudflare (cf-*), CloudFront (x-amz-cf-*) och
-// vanliga generiska cache-/edge-konventioner, snarare än att hårdkoda en CDN.
+// Generic patterns for headers that reveal which CDN node/edge server
+// responded - covers Akamai, Cloudflare (cf-*), CloudFront (x-amz-cf-*) and
+// common generic cache/edge conventions, rather than hardcoding a specific CDN.
 const NETWORK_PATH_PATTERNS = [/^x-cache/i, /^x-served/i, /^x-edge/i, /^via$/i, /^x-amz-cf/i, /^cf-/i, /^x-akamai/i];
 
 function isNetworkPathHeader(key) {
   return NETWORK_PATH_PATTERNS.some((re) => re.test(key));
 }
 
-// Bäst-ansträngning: många CDN-noder namnges med en flygplatskod (t.ex.
-// "ARN52" för Stockholm Arlanda) följt av siffror. Vi extraherar bara
-// mönstret rått - vi översätter INTE koden till en stad, det vore att gissa.
+// Best-effort: many CDN nodes are named with an airport code (e.g.
+// "ARN52" for Stockholm Arlanda) followed by digits. We only extract the
+// pattern raw - we do NOT translate the code into a city, that would be guessing.
 const GEO_HINT_RE = /\b([A-Z]{3})\d{1,4}\b/;
 
 function extractGeoHint(headerValues) {
@@ -203,9 +203,9 @@ function extractGeoHint(headerValues) {
 }
 
 /**
- * Filtrerar fram headrar som avslöjar CDN-routing (cache-status, vilken nod
- * som svarade osv.) ur den fullständiga headerlistan, samt en bäst-
- * ansträngning-gissning på en geografisk ledtråd i nodnamnet.
+ * Filters out headers that reveal CDN routing (cache status, which node
+ * responded, etc.) from the full header list, plus a best-effort
+ * guess at a geographic hint in the node name.
  */
 export function computeNetworkPath(allHeaders) {
   const headers = {};
@@ -219,9 +219,9 @@ export function computeNetworkPath(allHeaders) {
 }
 
 /**
- * Slår upp IP-adresserna ett värdnamn pekar mot just nu. Endast en av flera
- * möjliga noder bakom DNS-baserad lastbalansering - inte nödvändigtvis
- * samma nod som faktiskt svarade på det HTTP-anrop vi redan gjort.
+ * Looks up the IP addresses a hostname currently points to. Only one of several
+ * possible nodes behind DNS-based load balancing - not necessarily
+ * the same node that actually responded to the HTTP request we already made.
  */
 export async function resolveDnsAddresses(hostname) {
   try {
@@ -238,8 +238,8 @@ export async function resolveDnsAddresses(hostname) {
 }
 
 /**
- * Hämtar rå manifesttext. Kastar UpstreamHttpError vid icke-OK status
- * (med kroppsutdrag för felsökning, t.ex. Akamais felsidor).
+ * Fetches the raw manifest text. Throws UpstreamHttpError on a non-OK status
+ * (with a body excerpt for debugging, e.g. Akamai's error pages).
  */
 async function fetchManifestRaw(url) {
   const response = await fetchWithTimeout(url, { method: 'GET' });
@@ -251,7 +251,7 @@ async function fetchManifestRaw(url) {
 }
 
 /**
- * Hämtar och tolkar ett manifest (master ELLER media - avgörs av parser.js).
+ * Fetches and parses a manifest (master OR media - determined by parser.js).
  */
 export async function getManifest(url) {
   const { finalUrl, text } = await fetchManifestRaw(url);
@@ -269,8 +269,8 @@ export async function getManifest(url) {
 }
 
 /**
- * Följer ev. master-playlist ner till en konkret media-playlist (med segment).
- * Radio-strömmar saknar ofta master-lagret helt - då returneras media direkt.
+ * Follows any master playlist down to a concrete media playlist (with segments).
+ * Radio streams often lack the master layer entirely - in that case media is returned directly.
  */
 export async function resolveMediaPlaylist(url) {
   const manifest = await getManifest(url);
@@ -298,7 +298,7 @@ export async function resolveMediaPlaylist(url) {
 }
 
 // ---------------------------------------------------------------------------
-// Segment, buffert och latens
+// Segments, buffer and latency
 // ---------------------------------------------------------------------------
 
 export function computeSegmentStats(mediaParsed) {
@@ -324,11 +324,11 @@ export function computeSegmentStats(mediaParsed) {
 }
 
 /**
- * Samlar allt LL-HLS-specifikt (EXT-X-SERVER-CONTROL, EXT-X-PART-INF,
- * EXT-X-PART, EXT-X-PRELOAD-HINT, EXT-X-RENDITION-REPORT) i en egen struktur
- * för ett tydligt avskilt "Low-Latency HLS"-underavsnitt. Flaggar motsägelsen
- * om CDN:et signalerar LL-HLS-stöd i headers (Akamais x-llhls-blocked) men
- * manifestet självt saknar alla LL-HLS-taggar.
+ * Gathers everything LL-HLS-specific (EXT-X-SERVER-CONTROL, EXT-X-PART-INF,
+ * EXT-X-PART, EXT-X-PRELOAD-HINT, EXT-X-RENDITION-REPORT) into its own structure
+ * for a clearly separated "Low-Latency HLS" subsection. Flags the contradiction
+ * if the CDN signals LL-HLS support in headers (Akamai's x-llhls-blocked) but
+ * the manifest itself lacks all LL-HLS tags.
  */
 export function computeLowLatencyInfo(mediaParsed, connectionHeaders = {}) {
   const segments = mediaParsed.segments || [];
@@ -362,10 +362,10 @@ export function computeLowLatencyInfo(mediaParsed, connectionHeaders = {}) {
 }
 
 /**
- * Samlar EXT-X-DISCONTINUITY-SEQUENCE, var i fönstret EXT-X-DISCONTINUITY
- * faktiskt förekommer (som absoluta media-sequence-nummer, inte bara ett
- * index i listan) och EXT-X-START, i en egen struktur för underavsnittet
- * "Kontinuitet och startpunkt".
+ * Gathers EXT-X-DISCONTINUITY-SEQUENCE, where in the window EXT-X-DISCONTINUITY
+ * actually occurs (as absolute media sequence numbers, not just an
+ * index into the list), and EXT-X-START, into its own structure for the
+ * "Continuity and start point" subsection.
  */
 export function computeContinuityInfo(mediaParsed) {
   const segments = mediaParsed.segments || [];
@@ -395,18 +395,18 @@ export function computeContinuityInfo(mediaParsed) {
 }
 
 /**
- * Beräknar latens från PROGRAM-DATE-TIME-taggar. Äldre HLS (t.ex. version 3)
- * sätter ofta bara taggen en gång, på det första segmentet i fönstret, inte
- * på varje segment. Att då jämföra samma tidsstämpel mot väggklockan som om
- * den vore det senaste segmentets ger en kraftigt underskattad fördröjning.
+ * Calculates latency from PROGRAM-DATE-TIME tags. Older HLS (e.g. version 3)
+ * often sets the tag only once, on the first segment in the window, not
+ * on every segment. Comparing that same timestamp against the wall clock as if
+ * it belonged to the newest segment would then give a badly underestimated delay.
  *
- * Vi hittar alla segment som faktiskt har en egen tidsstämpel ("ankare").
- * Finns två eller fler ankare litar vi på dem direkt (så gör de flesta
- * moderna paketerare - varje segment har sin egen PROGRAM-DATE-TIME).
- * Finns bara ETT ankare extrapolerar vi fram tidsstämpeln för första och
- * sista segmentet genom att addera/subtrahera EXTINF-längderna mellan
- * ankaret och respektive segment - och flaggar resultatet som beräknat,
- * inte uppmätt, så användaren vet att siffran är mer osäker.
+ * We find all segments that actually have their own timestamp ("anchor").
+ * If there are two or more anchors we trust them directly (as most
+ * modern packagers do - each segment has its own PROGRAM-DATE-TIME).
+ * If there's only ONE anchor, we extrapolate the timestamp for the first and
+ * last segment by adding/subtracting the EXTINF durations between
+ * the anchor and the respective segment - and flag the result as calculated,
+ * not measured, so the user knows the number is less certain.
  */
 export function computeLatency(mediaParsed) {
   const segments = mediaParsed.segments || [];
@@ -421,8 +421,8 @@ export function computeLatency(mediaParsed) {
     return { available: false };
   }
 
-  // Summerar EXTINF-längder (i ms) mellan två segmentindex - positiv summa
-  // framåt i listan, negativ bakåt, så den kan adderas direkt till ankarets tid.
+  // Sums EXTINF durations (in ms) between two segment indices - positive sum
+  // going forward in the list, negative going backward, so it can be added directly to the anchor's time.
   function msBetween(fromIndex, toIndex) {
     let sum = 0;
     if (toIndex > fromIndex) {
@@ -462,9 +462,9 @@ export function computeLatency(mediaParsed) {
 }
 
 /**
- * Mäter faktisk bitrate för de N senaste segmenten via HEAD-anrop
- * (Content-Length / EXTINF-duration = kbit/s). Enskilda segmentfel
- * kastar aldrig hela analysen - de markeras bara som misslyckade.
+ * Measures actual bitrate for the N most recent segments via HEAD requests
+ * (Content-Length / EXTINF duration = kbit/s). Individual segment failures
+ * never abort the whole analysis - they're just marked as failed.
  */
 export async function measureSegmentBitrates(mediaParsed, count = 12) {
   const segments = mediaParsed.segments || [];
@@ -502,7 +502,7 @@ export async function measureSegmentBitrates(mediaParsed, count = 12) {
 }
 
 // ---------------------------------------------------------------------------
-// ffprobe / ffmpeg som barnprocesser
+// ffprobe / ffmpeg as child processes
 // ---------------------------------------------------------------------------
 
 function runChildProcess(command, args, { timeoutMs = TIMEOUT_MS } = {}) {
@@ -556,8 +556,8 @@ function simplifyProbeResult(probeJson) {
 }
 
 /**
- * Kör ffprobe mot en URL (master eller media - ffmpegs HLS-demuxer klarar båda)
- * och returnerar både rådata och en förenklad sammanfattning av ljudspåret.
+ * Runs ffprobe against a URL (master or media - ffmpeg's HLS demuxer handles both)
+ * and returns both the raw data and a simplified summary of the audio track.
  */
 export async function runFfprobe(url) {
   const args = [
@@ -585,10 +585,10 @@ export async function runFfprobe(url) {
 }
 
 /**
- * Spelar in N sekunder av strömmen till en temporär fil och analyserar den:
- * - uppmätt bitrate = filstorlek * 8 / faktisk speltid
- * - ID3/timed metadata i ev. dataspår (bäst-ansträngning; inte alla
- *   strömmar bär "nu spelas"-metadata i HLS-segmenten).
+ * Records N seconds of the stream to a temporary file and analyzes it:
+ * - measured bitrate = file size * 8 / actual playback duration
+ * - ID3/timed metadata in any data streams (best-effort; not all
+ *   streams carry "now playing" metadata in the HLS segments).
  */
 export async function sampleStream(url, requestedSeconds = 8) {
   const secs = Math.min(30, Math.max(1, Number(requestedSeconds) || 8));
@@ -619,7 +619,7 @@ export async function sampleStream(url, requestedSeconds = 8) {
       throw new FfmpegError(rec.stderr);
     }
 
-    // Format/ström-info + eventuella ID3/timed-metadata-frames i dataspår.
+    // Format/stream info + any ID3/timed-metadata frames in data streams.
     const probeArgs = ['-v', 'quiet', '-print_format', 'json', '-show_format', '-show_streams', tempFile];
     const framesArgs = [
       '-v', 'quiet',
@@ -635,10 +635,10 @@ export async function sampleStream(url, requestedSeconds = 8) {
     ]);
 
     let probeJson = {};
-    try { probeJson = JSON.parse(probeRes.stdout); } catch { /* lämna tomt objekt */ }
+    try { probeJson = JSON.parse(probeRes.stdout); } catch { /* leave empty object */ }
 
     let framesJson = {};
-    try { framesJson = JSON.parse(framesRes.stdout); } catch { /* lämna tomt objekt */ }
+    try { framesJson = JSON.parse(framesRes.stdout); } catch { /* leave empty object */ }
 
     const format = probeJson.format || {};
     const actualDurationSec = Number(format.duration) || secs;
@@ -676,7 +676,7 @@ export async function checkBinaryAvailable(binary) {
 }
 
 // ---------------------------------------------------------------------------
-// Samlad analys för POST /api/analyze
+// Combined analysis for POST /api/analyze
 // ---------------------------------------------------------------------------
 
 export async function analyze(url) {

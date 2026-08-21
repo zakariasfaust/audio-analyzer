@@ -1,10 +1,10 @@
 // terms.js
-// Ordlista med korta förklaringar (max 3 meningar) till rubriker och
-// värdenamn i gränssnittet. Visas som native tooltip via title-attribut,
-// se withHint() i app.js. Laddas som eget skript före app.js.
+// Glossary with short explanations (max 3 sentences) for headings and
+// value names in the UI. Shown as a native tooltip via the title attribute,
+// see withHint() in app.js. Loaded as its own script before app.js.
 
 const HLS_TERMS = {
-  // Sektionsrubriker (h2)
+  // Section headings (h2)
   anslutning:
     'Visar om hämtningen av manifestet lyckades och vilka HTTP-headrar CDN:en svarade med, inklusive om CORS (Cross-Origin Resource Sharing) tillåts. Saknas CORS kan en vanlig webbläsare inte hämta strömmen direkt utan en proxy som den här backend:en.',
   varianter:
@@ -23,7 +23,7 @@ const HLS_TERMS = {
   natverksvag:
     'Visar vilken CDN-nod eller edge-server som svarade, utläst ur headrar som matchar vanliga routing-konventioner (x-cache, x-served, via, cf-*, x-amz-cf-* m.fl.), samt en DNS-uppslagning av värdnamnet.',
 
-  // Anslutning (dt)
+  // Connection (dt)
   status: 'HTTP-statuskoden servern svarade med. 200 betyder OK; 4xx/5xx betyder ett fel hos klienten respektive servern.',
   'begard-url': 'Den URL som skrevs in i fältet ovan och skickades för analys.',
   'slutlig-url':
@@ -44,7 +44,7 @@ const HLS_TERMS = {
   'extra-headers':
     'Alla HTTP-headrar i svaret vars namn börjar med "x-" (en gammal konvention för icke-standardiserade headrar) eller innehåller "akamai". Ofta de mest talande för vad som hänt hos CDN:et, t.ex. om svaret kom från cache eller vilken server som svarade.',
 
-  // Varianter (th)
+  // Variants (th)
   'variant-bandbredd':
     'Toppbandbredden (kbit/s) variantens kodning kan kräva, enligt manifestet - ett riktvärde, inte samma sak som den faktiska uppmätta bitraten.',
   'variant-snitt':
@@ -53,14 +53,14 @@ const HLS_TERMS = {
   upplosning: 'Videoupplösningen i bredd × höjd bildpunkter. Tom för renodlade ljudströmmar som radio.',
   'variant-url': 'Länken till just den här variantens egna media-playlist.',
 
-  // Ljudspåret (dt)
+  // Audio track (dt)
   codec: 'Vilken ljudkodek segmenten är kodade med, t.ex. AAC. Profilen inom parentes (t.ex. LC) beskriver en specifik variant av kodeken.',
   samplingsfrekvens: 'Hur många gånger per sekund ljudet mättes vid inspelningen, i Hertz. 48 000 och 44 100 Hz är vanligast.',
   kanaler: 'Antal ljudkanaler - 1 är mono, 2 är stereo. Fler kanaler förekommer vid surroundljud.',
   'audio-bitrate': 'Hur mycket data ljudet kodas med per sekund - högre bitrate ger normalt bättre kvalitet men kräver mer bandbredd.',
   container: 'Filformatet segmenten är paketerade i, t.ex. MPEG-TS (.ts) eller fragmenterad MP4 (fMP4).',
 
-  // Segment och buffert (dt)
+  // Segments and buffer (dt)
   version: 'HLS-protokollversionen manifestet är skrivet för, vilket avgör vilka taggar och funktioner som får användas.',
   targetduration:
     'Den längsta tillåtna segmentlängden i sekunder. Spelare använder värdet för att veta hur ofta de bör hämta ett nytt manifest.',
@@ -94,7 +94,7 @@ const HLS_TERMS = {
   'll-preload-hint':
     'EXT-X-PRELOAD-HINT annonserar ett kommande delsegment eller initieringssegment som spelaren kan börja begära redan innan det är färdigproducerat, via en blockerande förfrågan.',
 
-  // Kontinuitet och startpunkt (h3 + dt)
+  // Continuity and start point (h3 + dt)
   kontinuitet:
     'Visar var i strömmen kodning eller tidsbas faktiskt byts (discontinuities), och var en spelare rekommenderas börja spela upp - två separata saker som lätt blandas ihop med latens och buffertfönster.',
   'discontinuity-sequence':
@@ -102,7 +102,7 @@ const HLS_TERMS = {
   'ext-x-start':
     'Anger var i strömmen en spelare rekommenderas börja uppspelningen (TIME-OFFSET), inte var den faktiskt kan börja. Positivt värde räknas från fönstrets början, negativt värde bakåt från livekanten.',
 
-  // Latens (dt)
+  // Latency (dt)
   'latens-metod':
     '"Uppmätt direkt" betyder att flera segment har egna tidsstämplar och siffran är tillförlitlig. "Beräknad från segmentsumma" betyder att bara ett segment i fönstret hade en tidsstämpel (vanligt i äldre HLS) - resten är extrapolerat genom att addera segmentens längder, vilket gör siffran mer osäker.',
   'aldsta-ts': 'Tidsstämpeln för det äldsta segmentet i det synliga fönstret, enligt dess PROGRAM-DATE-TIME-tagg.',
@@ -111,7 +111,7 @@ const HLS_TERMS = {
   'fordrojning-nyaste':
     'Hur många sekunder som gått sedan det senaste tillgängliga segmentet spelades in - ett mått på den faktiska fördröjningen en lyssnare upplever.',
 
-  // Uppmätt bitrate (dt/th)
+  // Measured bitrate (dt/th)
   'snitt-uppmatt':
     'Genomsnittlig bitrate (kbit/s), beräknad från de faktiska filstorlekarna på de senast hämtade segmenten delat på deras spellängd.',
   'deklarerad-bandbredd': 'Den bandbredd manifestet uppger för den valda varianten, till jämförelse med vad som faktiskt mättes upp.',
@@ -119,7 +119,7 @@ const HLS_TERMS = {
   bytes: 'Segmentets faktiska filstorlek i bytes, hämtad via ett HEAD-anrop mot segment-URL:en.',
   'bitrate-kolumn': 'Segmentets storlek omräknat till kbit/s baserat på dess spellängd.',
 
-  // Nu spelas (th)
+  // Now playing (th)
   'tid-i-segment': 'Var i den inspelade sekvensen, i sekunder från start, som ID3-taggen hittades.',
   taggar: 'Den faktiska metadatan som hittades, t.ex. låttitel eller artist, i sitt rådataformat.',
 };
