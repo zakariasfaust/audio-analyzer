@@ -2,7 +2,7 @@
   "name": "audio-analyzer",
   "version": "1.0.0",
   "private": true,
-  "description": "Lokalt verktyg för att analysera ljudströmmar och ljudfiler - manifest, kodekar, buffert, latens, ljudnivå och ID3-metadata",
+  "description": "Lokalt verktyg för att analysera ljudströmmar - manifest, kodekar, buffert, latens, bitrate och ID3-metadata",
   "type": "module",
   "engines": {
     "node": ">=18"

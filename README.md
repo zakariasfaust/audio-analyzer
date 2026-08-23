@@ -1,7 +1,7 @@
 # Audio Analyzer
 
-A small local tool for analyzing audio streams (currently HLS/`.m3u8`)
-and audio files - designed especially for radio streams behind CDNs like Akamai.
+A small local tool for analyzing audio streams (currently HLS/`.m3u8`) -
+designed especially for radio streams behind CDNs like Akamai.
 Paste in a manifest URL and get a combined status snapshot: connection/CORS,
 variants, audio codec, segments and buffer, latency, measured bitrate,
 "now playing" ID3, and the raw manifest.

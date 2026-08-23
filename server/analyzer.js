@@ -448,9 +448,9 @@ export function computeLatency(mediaParsed) {
   function msBetween(fromIndex, toIndex) {
     let sum = 0;
     if (toIndex > fromIndex) {
-      for (let i = fromIndex + 1; i <= toIndex; i++) sum += (segments[i].duration || 0) * 1000;
+      for (let i = fromIndex; i < toIndex; i++) sum += (segments[i].duration || 0) * 1000;
     } else {
-      for (let i = toIndex + 1; i <= fromIndex; i++) sum -= (segments[i].duration || 0) * 1000;
+      for (let i = toIndex; i < fromIndex; i++) sum -= (segments[i].duration || 0) * 1000;
     }
     return sum;
   }
@@ -629,6 +629,7 @@ export async function sampleStream(url, requestedSeconds = 8) {
 
   try {
     const rec = await runChildProcess('ffmpeg', ffmpegArgs, { timeoutMs: secs * 1000 + TIMEOUT_MS });
+    if (rec.timedOut) throw new TimeoutError(url);
 
     let stat;
     try {
