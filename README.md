@@ -16,7 +16,7 @@ as child processes. The frontend is plain HTML/CSS/JS with no build step or fram
 
 ## Prerequisites
 
-- Node.js 18 or later
+- Node.js 18.17 or later
 - `ffmpeg` (including `ffprobe`) installed and available in PATH
   - macOS: `brew install ffmpeg`
   - Linux: `sudo apt install ffmpeg` (or `sudo dnf install ffmpeg`)
@@ -32,10 +32,11 @@ npm install
 npm start
 ```
 
-The server explicitly binds to `127.0.0.1` (not `0.0.0.0`) and listens on
-port `8877` by default (override with `PORT=xxxx npm start`). Open
-`http://127.0.0.1:8877/` in your browser, paste in a `.m3u8` URL, and click
-Analyze.
+The server binds to `127.0.0.1` by default (not `0.0.0.0`) and listens on
+port `8877` by default (override with `PORT=xxxx npm start`; override the bind
+address with `HOST=xxxx npm start` - see [Security posture](#security-posture)
+below before exposing it). Open `http://127.0.0.1:8877/` in your browser, paste
+in a `.m3u8` URL, and click Analyze.
 
 ## Testing
 
@@ -61,6 +62,35 @@ There are no automated tests. Manual verification:
   `geoip-lite` database (offline, no external calls) - it's a rough,
   unverified complement to the header-based hint, not a replacement, and
   adds a fairly large dependency (~115 MB unpacked) to `npm install`.
+
+## Security posture
+
+The tool is built to run locally and binds to `127.0.0.1` for that reason.
+Setting `HOST=0.0.0.0` exposes it on the network; if you do that, these are the
+protections in place - and their limits:
+
+- **No login.** Anyone who can reach the URL can use it. Don't rely on the URL
+  being hard to find - a TLS certificate publishes the hostname in public
+  Certificate Transparency logs the moment it's issued.
+- **Per-IP rate limit** on `/api/*` - `RATE_LIMIT_MAX` / `RATE_LIMIT_WINDOW_MS`
+  in `server/index.js` (60 requests per 5 minutes). Tune to taste.
+- **Global concurrency cap** - `MAX_CONCURRENT_JOBS` in `server/index.js` (3).
+  The two endpoints that spawn `ffprobe`/`ffmpeg` reject with 503 past this,
+  regardless of source IP - this is what bounds CPU, memory, disk and bandwidth
+  under load.
+- **SSRF guard** - `assertPublicHost` in `server/analyzer.js` blocks outbound
+  requests to `localhost`, private/link-local ranges, and cloud-metadata
+  addresses. For `fetch`-based traffic (manifests, headers, segment probes) it's
+  backed by an undici dispatcher that re-checks the real remote IP of every
+  connection, including each redirect hop, so bare-IP URLs, redirects into
+  private space, and DNS rebinding are all caught. `ffprobe`/`ffmpeg` do their
+  own DNS and socket work outside Node, so for those two the up-front check is
+  the only layer - a determined rebinding attack there is not fully closed.
+- **Recording is capped** - `/api/sample` records audio only (no video), 15s max.
+
+If you need real access control, put authentication in front of the app (a
+reverse proxy, or your host's own network controls) - the above is a baseline
+against casual abuse, not hardening for a hostile multi-tenant environment.
 
 ## License
 

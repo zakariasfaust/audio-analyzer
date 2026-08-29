@@ -275,39 +275,4 @@ export function parseM3U8(text, baseUrl) {
   return { type: 'unknown', version: null };
 }
 
-/**
- * Rewrites all URIs in a manifest text so they point back at
- * our own proxy (/api/proxy?url=...). Used by /api/proxy so that
- * hls.js can play the stream despite CORS blocking on the CDN's part -
- * every segment and key URI must go through the same proxy as the manifest.
- */
-export function rewriteManifestForProxy(text, baseUrl, proxyPath = '/api/proxy') {
-  const toProxyUrl = (uri) => {
-    const absolute = resolveUrl(baseUrl, uri);
-    return `${proxyPath}?url=${encodeURIComponent(absolute)}`;
-  };
-
-  const lines = text.split(/\r?\n/).map((rawLine) => {
-    const line = rawLine.trim();
-
-    // Tags that carry a URI="..." attribute (encryption, fMP4 init, alternate audio tracks).
-    if (
-      line.startsWith('#EXT-X-KEY:') ||
-      line.startsWith('#EXT-X-MAP:') ||
-      line.startsWith('#EXT-X-MEDIA:')
-    ) {
-      return line.replace(/URI="([^"]*)"/, (_match, uri) => `URI="${toProxyUrl(uri)}"`);
-    }
-
-    // Regular segment/variant URI lines (anything that isn't a comment or empty).
-    if (line !== '' && !line.startsWith('#')) {
-      return toProxyUrl(line);
-    }
-
-    return rawLine;
-  });
-
-  return lines.join('\n');
-}
-
 export { resolveUrl, parseAttributeList };

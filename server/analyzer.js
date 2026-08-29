@@ -9,8 +9,14 @@ import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import dns from 'node:dns/promises';
+import { lookup as dnsLookup } from 'node:dns';
+import { promisify } from 'node:util';
 import geoip from 'geoip-lite';
+import ipaddr from 'ipaddr.js';
+import { Agent, buildConnector } from 'undici';
 import { parseM3U8 } from './parser.js';
+
+const dnsLookupAsync = promisify(dnsLookup);
 
 export const TIMEOUT_MS = 10_000;
 export const USER_AGENT =
@@ -87,6 +93,14 @@ export class ValidationError extends AppError {
   }
 }
 
+export class HostBlockedError extends AppError {
+  constructor(hostname) {
+    super('HOST_BLOCKED', `"${hostname}" pekar mot ett internt/privat nätverk och kan inte analyseras.`, {
+      hostname,
+    });
+  }
+}
+
 // ---------------------------------------------------------------------------
 // URL validation
 // ---------------------------------------------------------------------------
@@ -107,16 +121,86 @@ export function validateUrl(raw) {
   return parsed.toString();
 }
 
+// Non-public IP ranges we refuse to connect to now that this server can be
+// reached from the internet - blocks the obvious SSRF targets (loopback,
+// RFC1918/link-local, the private *.railway.internal-style network of whatever
+// host runs this, cloud metadata endpoints like 169.254.169.254).
+//
+// assertPublicHost() below is the up-front name/IP check. For fetch()-based
+// traffic it is backed by ssrfSafeAgent, which re-validates the real remote IP
+// of every connection - including each redirect hop - the instant the socket
+// opens. That catches what the up-front check cannot see on its own: a bare-IP
+// URL, a redirect into a private range, and DNS rebinding after the name check.
+// ffprobe/ffmpeg resolve and connect on their own, outside Node, so for those
+// two the up-front check is the only layer.
+const PUBLIC_IP_RANGES = new Set(['unicast']);
+
+function isPublicAddress(ip) {
+  let range;
+  try {
+    range = ipaddr.process(ip).range();
+  } catch {
+    return false;
+  }
+  return PUBLIC_IP_RANGES.has(range);
+}
+
+export async function assertPublicHost(urlString) {
+  const { hostname } = new URL(urlString);
+  const lowerHost = hostname.toLowerCase();
+
+  if (lowerHost === 'localhost' || lowerHost.endsWith('.railway.internal')) {
+    throw new HostBlockedError(hostname);
+  }
+
+  let addresses;
+  try {
+    addresses = await dnsLookupAsync(hostname, { all: true });
+  } catch {
+    return; // DNS failure isn't an SSRF case - let the caller's own fetch/spawn fail naturally.
+  }
+
+  for (const { address } of addresses) {
+    if (!isPublicAddress(address)) {
+      throw new HostBlockedError(hostname);
+    }
+  }
+}
+
+// undici dispatcher used for every fetch() below. Its connector runs the base
+// TCP/TLS connect, then checks the socket's actual remote IP before handing the
+// connection back - so a redirect hop or a rebound DNS name that lands on a
+// private address is dropped before a single request byte is written.
+const baseConnector = buildConnector({});
+const ssrfSafeAgent = new Agent({
+  connect(opts, callback) {
+    baseConnector(opts, (err, socket) => {
+      if (err) {
+        callback(err);
+        return;
+      }
+      if (!isPublicAddress(socket.remoteAddress)) {
+        socket.destroy();
+        callback(new HostBlockedError(opts.hostname || socket.remoteAddress));
+        return;
+      }
+      callback(null, socket);
+    });
+  },
+});
+
 // ---------------------------------------------------------------------------
 // HTTP fetching with timeout and a realistic User-Agent
 // ---------------------------------------------------------------------------
 
 async function fetchWithTimeout(url, options = {}) {
+  await assertPublicHost(url);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
   try {
     return await fetch(url, {
       redirect: 'follow',
+      dispatcher: ssrfSafeAgent,
       ...options,
       headers: {
         'User-Agent': USER_AGENT,
@@ -127,6 +211,10 @@ async function fetchWithTimeout(url, options = {}) {
     });
   } catch (err) {
     if (err.name === 'AbortError') throw new TimeoutError(url);
+    // undici wraps a connector rejection as TypeError('fetch failed', { cause }).
+    // Surface our own HostBlockedError (from ssrfSafeAgent rejecting a redirect
+    // hop into a private range) rather than the opaque wrapper.
+    if (err?.cause instanceof AppError) throw err.cause;
     throw err;
   } finally {
     clearTimeout(timer);
@@ -142,7 +230,7 @@ function headersToObject(headers) {
 }
 
 /**
- * Fetches only the HTTP headers for a URL (for /api/headers and the connection card).
+ * Fetches only the HTTP headers for a URL (for the connection card).
  * Never reads out the whole body unnecessarily.
  */
 export async function fetchHeaders(url) {
@@ -582,6 +670,8 @@ function simplifyProbeResult(probeJson) {
  * and returns both the raw data and a simplified summary of the audio track.
  */
 export async function runFfprobe(url) {
+  await assertPublicHost(url);
+
   const args = [
     '-v', 'quiet',
     '-user_agent', USER_AGENT,
@@ -611,9 +701,15 @@ export async function runFfprobe(url) {
  * - measured bitrate = file size * 8 / actual playback duration
  * - ID3/timed metadata in any data streams (best-effort; not all
  *   streams carry "now playing" metadata in the HLS segments).
+ *
+ * Only audio and data (ID3) streams are recorded - never video - and the
+ * capture is capped at 15s, so one call can't be steered into pulling a large
+ * video rendition down through the server.
  */
 export async function sampleStream(url, requestedSeconds = 8) {
-  const secs = Math.min(30, Math.max(1, Number(requestedSeconds) || 8));
+  await assertPublicHost(url);
+
+  const secs = Math.min(15, Math.max(1, Number(requestedSeconds) || 8));
   const tempFile = path.join(os.tmpdir(), `audio-analyzer-${randomUUID()}.ts`);
 
   const ffmpegArgs = [
@@ -621,7 +717,8 @@ export async function sampleStream(url, requestedSeconds = 8) {
     '-user_agent', USER_AGENT,
     '-i', url,
     '-t', String(secs),
-    '-map', '0',
+    '-map', '0:a',
+    '-map', '0:d?',
     '-c', 'copy',
     '-f', 'mpegts',
     tempFile,
