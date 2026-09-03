@@ -2,8 +2,9 @@
 // Glossary with short explanations (max 3 sentences) for headings and
 // value names in the UI. Shown as a native tooltip via the title attribute,
 // see withHint() in app.js. Loaded as its own script before app.js.
+// Covers both the HLS and DASH sections.
 
-const HLS_TERMS = {
+const STREAM_TERMS = {
   // Section headings (h2)
   anslutning:
     'Visar om hämtningen av manifestet lyckades och vilka HTTP-headrar CDN:en svarade med, inklusive om CORS (Cross-Origin Resource Sharing) tillåts. Saknas CORS kan en vanlig webbläsare inte hämta strömmen direkt utan en proxy som den här backend:en.',
@@ -124,4 +125,37 @@ const HLS_TERMS = {
   // Now playing (th)
   'tid-i-segment': 'Var i den inspelade sekvensen, i sekunder från start, som ID3-taggen hittades.',
   taggar: 'Den faktiska metadatan som hittades, t.ex. låttitel eller artist, i sitt rådataformat.',
+
+  // --- DASH ---
+  mpd:
+    'Media Presentation Description - det XML-manifest som är DASH:s motsvarighet till HLS master-playlisten. Ett enda dokument beskriver hela strömmen: alla kvaliteter, hur segmenten adresseras och (för live) tidslinjen.',
+  representation:
+    'En enskild kvalitetsnivå av en ström i DASH (motsvarar en HLS-variant). Verktyget analyserar den första ljudrepresentationen i den första perioden, samma "först, inte bäst"-val som HLS-sidan gör.',
+  adaptationset:
+    'En grupp representationer av samma typ och språk (t.ex. "allt engelskt ljud") som en spelare kan växla fritt mellan. Typen (audio/video/text) läses från contentType, mimeType eller codec-strängen.',
+  presentationtype:
+    'static betyder en färdig VOD-resurs; dynamic betyder en live-ström vars manifest uppdateras löpande. Motsvarar HLS live/VOD-skillnaden.',
+  segmenttemplate:
+    'Hur segment-URL:erna byggs. SegmentTemplate med $Number$ räknar upp ett löpnummer; SegmentTimeline listar varje segments längd explicit (med r = antal upprepningar); SegmentList räknar upp färdiga URL:er. Verktyget genererar de senaste URL:erna och HEAD-hämtar dem för att mäta bitrate.',
+  mediapresentationduration:
+    'Strömmens totala längd för en static (VOD) MPD, uttryckt som ISO 8601-varaktighet (t.ex. PT10M30S). Saknas för dynamic live-strömmar.',
+  minbuffertime:
+    'Den minsta mängd media (i sekunder) en spelare bör ha buffrat innan uppspelning för att klara nätverksvariationer, enligt manifestet. Grov DASH-motsvarighet till HLS target duration som buffertriktvärde.',
+  minimumupdateperiod:
+    'Hur ofta (sekunder) en spelare måste hämta om MPD:n för en dynamic ström för att upptäcka nya segment. Ett lågt värde antyder att strömmen är byggd för låg latens.',
+  timeshiftbufferdepth:
+    'Hur långt bakåt i tiden (sekunder) en live-ström kan spolas - DASH:ens DVR-fönster. Motsvarar ungefär hur många segment HLS håller i sitt fönster.',
+  suggestedpresentationdelay:
+    'Den fördröjning från livekanten (sekunder) som manifestet rekommenderar att spelare håller. Direkt jämförbar med HLS HOLD-BACK.',
+  'dash-est-delay':
+    'En grov uppskattning av hur långt efter livekanten en spelare hamnar: suggestedPresentationDelay om det anges, annars cirka tre segmentlängders buffert.',
+  availabilitystarttime:
+    'Nollpunkten (väggklockan) som segmentens tidslinje räknas från i en dynamic MPD. Simulerade testströmmar sätter ofta denna till 1970 (epoch) med flit.',
+  publishtime: 'Tidpunkten den aktuella versionen av MPD:n publicerades. Skillnaden mot nu ("Manifestets ålder") visar hur färskt manifestet är.',
+  'manifest-age':
+    'Hur länge sedan MPD:n senast publicerades (nu minus publishTime). Bör vara mindre än minimumUpdatePeriod för en välfungerande live-ström. Visas inte när publishTime är epoch-förankrad.',
+  contentprotection:
+    'DRM/kryptering deklarerad i manifestet, visad som schemeIdUri (t.ex. Widevine, PlayReady, ClearKey). Verktyget visar bara att skyddet finns - det kan inte dekryptera, så ljudanalysen kan misslyckas för skyddade strömmar.',
+  'init-segment':
+    'Ett separat initieringssegment (fMP4) som innehåller spårets uppsättningsdata och måste hämtas före de vanliga mediesegmenten. Anges av initialization-attributet i MPD:n.',
 };

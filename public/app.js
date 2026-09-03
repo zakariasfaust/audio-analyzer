@@ -64,10 +64,10 @@ function fmtDateTime(iso) {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
-// Heading/value name with a hover explanation from HLS_TERMS (terms.js), as a
+// Heading/value name with a hover explanation from STREAM_TERMS (terms.js), as a
 // native title tooltip. Elements without a matching key get no title attribute.
 function withHint(tag, label, key) {
-  const text = HLS_TERMS[key];
+  const text = STREAM_TERMS[key];
   const titleAttr = text ? ` title="${esc(text)}"` : '';
   return `<${tag}${titleAttr}>${esc(label)}</${tag}>`;
 }
@@ -80,7 +80,7 @@ function withHint(tag, label, key) {
 function renderConnection(c) {
   const corsLine = c.cors.present
     ? `<dd>Ja (${esc(c.cors.allowOrigin)})</dd>`
-    : `<dd class="error">Nej - CORS-headers saknas. hls.js/webbläsaren kan inte hämta direkt från CDN:en.</dd>`;
+    : `<dd class="error">Nej - CORS-headers saknas. En webbläsarbaserad spelare kan inte hämta strömmen direkt från CDN:en utan en proxy som den här backend:en.</dd>`;
 
   const extra = Object.entries(c.extraHeaders || {});
   const extraHtml = extra.length
@@ -319,7 +319,7 @@ function renderBitrate(b) {
       ${withHint('h2', 'Uppmätt bitrate', 'bitrate')}
       <dl>
         ${withHint('dt', 'Snitt (uppmätt)', 'snitt-uppmatt')}<dd>${b.averageMeasuredBitrateKbps ? fmtNumber(b.averageMeasuredBitrateKbps) + ' kbit/s' : '–'}</dd>
-        ${withHint('dt', 'Deklarerad bandbredd', 'deklarerad-bandbredd')}<dd>${b.declaredBandwidthKbps ? fmtNumber(b.declaredBandwidthKbps) + ' kbit/s' : 'okänd (ingen BANDWIDTH-uppgift)'}</dd>
+        ${withHint('dt', 'Deklarerad bandbredd', 'deklarerad-bandbredd')}<dd>${b.declaredBandwidthKbps ? fmtNumber(b.declaredBandwidthKbps) + ' kbit/s' : 'okänd (ingen deklarerad bandbredd)'}</dd>
       </dl>
       <table>
         <thead><tr>${withHint('th', 'Tidsstämpel', 'tidsstampel')}${withHint('th', 'Bytes', 'bytes')}${withHint('th', 'Bitrate (kbit/s)', 'bitrate-kolumn')}</tr></thead>
@@ -399,16 +399,126 @@ function renderNetworkPath(np) {
     </section>`;
 }
 
+function renderRawManifest(label, url, raw) {
+  return `<h3>${esc(label)} (${esc(url)})</h3><pre>${esc(raw)}</pre>`;
+}
+
 function renderManifests(m) {
-  const masterBlock = m.master
-    ? `<h3>Master (${esc(m.master.url)})</h3><pre>${esc(m.master.raw)}</pre>`
-    : '';
   return `
     <section id="sec-manifest">
       ${withHint('h2', 'Råmanifest', 'manifest')}
-      ${masterBlock}
-      <h3>Media (${esc(m.media.url)})</h3>
-      <pre>${esc(m.media.raw)}</pre>
+      ${m.master ? renderRawManifest('Master', m.master.url, m.master.raw) : ''}
+      ${renderRawManifest('Media', m.media.url, m.media.raw)}
+    </section>`;
+}
+
+function renderDashManifest(m) {
+  return `
+    <section id="sec-manifest">
+      ${withHint('h2', 'Råmanifest (MPD)', 'mpd')}
+      ${renderRawManifest('MPD', m.mpd.url, m.mpd.raw)}
+    </section>`;
+}
+
+// ---------------------------------------------------------------------
+// DASH-specific sections. Genuinely new shapes - they do NOT reuse
+// renderVariants/renderSegments/renderLatency, but renderAudio, renderBitrate,
+// renderNetworkPath, renderConnection, renderWarnings and renderFatalError are
+// reused unchanged.
+// ---------------------------------------------------------------------
+
+// Unlike HLS variant rows, DASH representation rows are NOT click-to-reanalyse:
+// the whole MPD is already fetched, there is no separate URL per representation
+// to re-request. A genuine UX difference, not a missing feature.
+function renderDashRepresentations(reps) {
+  const notes = [reps.multiPeriodNote, reps.xlinkNote]
+    .filter(Boolean)
+    .map((n) => `<p class="note error">${esc(n)}</p>`)
+    .join('');
+
+  const rows = reps.list
+    .map((r) => {
+      const resOrRate = r.width && r.height
+        ? `${r.width}×${r.height}`
+        : r.audioSamplingRate
+        ? `${fmtInt(r.audioSamplingRate)} Hz`
+        : '–';
+      return `
+      <tr class="${r.chosen ? 'variant-active' : ''}">
+        <td>${esc(r.contentType || '–')}${r.lang ? ' (' + esc(r.lang) + ')' : ''}</td>
+        <td>${esc(r.id || '–')}${r.chosen ? ' ✓' : ''}</td>
+        <td>${fmtInt(r.bandwidthKbps)}</td>
+        <td>${esc(r.codecs || '–')}</td>
+        <td>${resOrRate}</td>
+      </tr>`;
+    })
+    .join('');
+
+  return `
+    <section id="sec-representations">
+      ${withHint('h2', 'Representationer', 'representation')}
+      <p class="note">Analyserad: <span class="mono">${esc(reps.chosenId || '–')}</span> (första ljudrepresentationen i period ${reps.periodIndex + 1}). Till skillnad från HLS-varianter går DASH-rader inte att klicka för omanalys - hela MPD:n är redan hämtad.</p>
+      ${notes}
+      <table>
+        <thead><tr>${withHint('th', 'Typ (språk)', 'adaptationset')}${withHint('th', 'ID', 'representation')}${withHint('th', 'Bandbredd (kbit/s)', 'variant-bandbredd')}${withHint('th', 'Codecs', 'codecs')}${withHint('th', 'Upplösning / samplerate', 'upplosning')}</tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </section>`;
+}
+
+function renderDashSegments(s) {
+  const cp = (s.contentProtection || []).length
+    ? s.contentProtection
+        .map((c) => esc(c.schemeIdUri || '?') + (c.value ? ` (${esc(c.value)})` : ''))
+        .join(', ')
+    : null;
+
+  return `
+    <section id="sec-segments">
+      ${withHint('h2', 'Segment och buffert', 'segment')}
+      <dl>
+        ${withHint('dt', 'Presentationstyp', 'presentationtype')}<dd>${s.isLive ? 'Live (dynamic)' : 'VOD (static)'}</dd>
+        ${withHint('dt', 'Segmentadressering', 'segmenttemplate')}<dd>${esc(s.segmentAddressing)}</dd>
+        ${withHint('dt', 'Segmentlängd', 'snittlangd')}<dd>${fmtDuration(s.segmentDurationSec)}</dd>
+        ${withHint('dt', 'Antal segment', 'antal-segment')}<dd>${s.segmentCount != null ? fmtInt(s.segmentCount) : '–'}${s.isLive ? ' (uppskattat)' : ''}</dd>
+        ${withHint('dt', 'Fönster / DVR-djup', 'timeshiftbufferdepth')}<dd>${fmtDuration(s.windowSeconds)}</dd>
+        ${withHint('dt', 'minBufferTime', 'minbuffertime')}<dd>${fmtDuration(s.minBufferTimeSec)}</dd>
+        ${withHint('dt', 'minimumUpdatePeriod', 'minimumupdateperiod')}<dd>${s.minimumUpdatePeriodSec != null ? fmtDuration(s.minimumUpdatePeriodSec) : '–'}</dd>
+        ${withHint('dt', 'mediaPresentationDuration', 'mediapresentationduration')}<dd>${fmtDuration(s.mediaPresentationDurationSec)}</dd>
+        ${withHint('dt', 'Kryptering', 'contentprotection')}<dd>${cp ? cp : 'Av'}</dd>
+        ${withHint('dt', 'Segmentformat', 'fmp4')}<dd>${s.fmp4 ? 'Fragmenterad MP4 (fMP4)' : 'Inget separat init-segment'}</dd>
+        ${withHint('dt', 'Init-segment', 'init-segment')}<dd>${s.initUri ? `<span class="mono">${esc(s.initUri)}</span>` : '–'}</dd>
+      </dl>
+    </section>`;
+}
+
+function renderDashLatency(l) {
+  if (!l.available) {
+    return `
+      <section id="sec-latency">
+        ${withHint('h2', 'Latens', 'latens')}
+        <p class="note">${esc(l.reason || 'Latens kan inte beräknas för den här strömmen.')}</p>
+      </section>`;
+  }
+  const methodLabel = l.method === 'declared' ? 'Deklarerad i manifestet' : 'Uppskattad från segmentlängd';
+  const ageLine = l.manifestAgeSec != null
+    ? fmtDuration(l.manifestAgeSec)
+    : l.epochAnchored
+    ? 'Ej tillgänglig (publishTime är epoch-förankrad - simulerad live)'
+    : '–';
+  return `
+    <section id="sec-latency">
+      ${withHint('h2', 'Latens', 'latens')}
+      <dl>
+        ${withHint('dt', 'Beräkningsmetod', 'latens-metod')}<dd>${methodLabel}</dd>
+        ${withHint('dt', 'availabilityStartTime', 'availabilitystarttime')}<dd>${fmtDateTime(l.availabilityStartTime)}${l.epochAnchored ? ' (epoch-förankrad)' : ''}</dd>
+        ${withHint('dt', 'publishTime', 'publishtime')}<dd>${fmtDateTime(l.publishTime)}</dd>
+        ${withHint('dt', 'Manifestets ålder', 'manifest-age')}<dd>${ageLine}</dd>
+        ${withHint('dt', 'suggestedPresentationDelay', 'suggestedpresentationdelay')}<dd>${l.suggestedPresentationDelaySec != null ? fmtDuration(l.suggestedPresentationDelaySec) : 'Hittades inte'}</dd>
+        ${withHint('dt', 'Uppskattad live-fördröjning', 'dash-est-delay')}<dd>${fmtDuration(l.estimatedLiveDelaySec)}${l.method === 'estimated' ? ' (grov)' : ''}</dd>
+        ${withHint('dt', 'minimumUpdatePeriod', 'minimumupdateperiod')}<dd>${l.minimumUpdatePeriodSec != null ? fmtDuration(l.minimumUpdatePeriodSec) : '–'}</dd>
+        ${withHint('dt', 'timeShiftBufferDepth', 'timeshiftbufferdepth')}<dd>${fmtDuration(l.timeShiftBufferDepthSec)}</dd>
+      </dl>
     </section>`;
 }
 
@@ -453,10 +563,12 @@ function renderFatalError(err) {
 // ---------------------------------------------------------------------
 
 function buildCopyText(data, sample, sampleError, variantsOverride) {
+  if (data.streamKind === 'dash') return buildDashCopyText(data, sample, sampleError);
+
   const lines = [];
   const add = (line = '') => lines.push(line);
 
-  add(`HLS-analys: ${data.requestedUrl}`);
+  add(`Strömanalys (HLS): ${data.requestedUrl}`);
   if (currentMasterUrl && currentAnalyzedUrl && currentAnalyzedUrl !== currentMasterUrl) {
     add(`(Variant vald från master: ${currentMasterUrl})`);
   }
@@ -636,6 +748,153 @@ function buildCopyText(data, sample, sampleError, variantsOverride) {
   return lines.join('\n');
 }
 
+// Parallel DASH branch of buildCopyText - the same sections the DASH render
+// chain shows, minus the raw MPD.
+function buildDashCopyText(data, sample, sampleError) {
+  const lines = [];
+  const add = (line = '') => lines.push(line);
+
+  add(`Strömanalys (DASH): ${data.requestedUrl}`);
+  add(`Genererad: ${fmtDateTime(new Date().toISOString())}`);
+  add('');
+
+  const c = data.connection;
+  add('ANSLUTNING');
+  add(`Status: ${c.status} ${c.statusText}`);
+  add(`Begärd URL: ${c.requestedUrl}`);
+  add(`Slutlig URL: ${c.finalUrl}${c.redirected ? ' (omdirigerad)' : ''}`);
+  add(`Content-Type: ${c.contentType || '–'}`);
+  add(`Server: ${c.server || '–'}`);
+  add(`Cache-Control: ${c.cacheControl || '–'}`);
+  add(`CORS: ${c.cors.present ? `Ja (${c.cors.allowOrigin})` : 'Nej - saknas'}`);
+  const extraHeaders = Object.entries(c.extraHeaders || {});
+  if (extraHeaders.length) {
+    add('x-/akamai-headers:');
+    extraHeaders.forEach(([k, v]) => add(`  ${k}: ${v}`));
+  }
+  add('');
+
+  const np = data.networkPath;
+  add('NÄTVERKSVÄG');
+  const npHeaders = Object.entries(np.headers || {});
+  if (npHeaders.length) npHeaders.forEach(([k, v]) => add(`  ${k}: ${v}`));
+  else add('Inga matchande routing-headrar hittades.');
+  add(`Möjlig geografisk ledtråd: ${np.geoHint ? `${np.geoHint.raw} (ogranskad gissning)` : 'Hittades inte'}`);
+  const dnsInfo = np.dns || {};
+  add(
+    `DNS-uppslagning (${dnsInfo.hostname || '–'}): ${
+      dnsInfo.error ? `kunde inte slås upp (${dnsInfo.error})` : dnsInfo.addresses?.join(', ') || 'inga adresser'
+    }`
+  );
+  add('');
+
+  const r = data.representations;
+  add('REPRESENTATIONER');
+  add(`Analyserad: ${r.chosenId || '–'} (period ${r.periodIndex + 1} av ${r.periodCount})`);
+  if (r.multiPeriodNote) add(r.multiPeriodNote);
+  if (r.xlinkNote) add(r.xlinkNote);
+  r.list.forEach((rep) => {
+    const size = rep.width && rep.height ? `${rep.width}×${rep.height}` : rep.audioSamplingRate ? `${rep.audioSamplingRate} Hz` : '–';
+    add(
+      `- [${rep.contentType || '?'}${rep.lang ? ' ' + rep.lang : ''}] ${rep.id || '?'}${rep.chosen ? ' (vald)' : ''}: ${fmtInt(
+        rep.bandwidthKbps
+      )} kbit/s, ${rep.codecs || 'okänd codec'}, ${size}`
+    );
+  });
+  add('');
+
+  const a = data.audio;
+  add('LJUDSPÅRET');
+  if (a) {
+    add(`Codec: ${a.codec || '–'}${a.profile ? ' (' + a.profile + ')' : ''}`);
+    add(`Samplingsfrekvens: ${a.sampleRate ? fmtInt(a.sampleRate) + ' Hz' : '–'}`);
+    add(`Kanaler: ${a.channels ?? '–'}${a.channelLayout ? ' (' + a.channelLayout + ')' : ''}`);
+    add(`Bitrate: ${a.bitRate ? fmtNumber(a.bitRate / 1000) + ' kbit/s' : 'okänd'}`);
+    add(`Container: ${a.container || '–'}`);
+  } else {
+    add('Kunde inte hämtas (se varningar).');
+  }
+  add('');
+
+  const s = data.segments;
+  add('SEGMENT OCH BUFFERT');
+  add(`Presentationstyp: ${s.isLive ? 'Live (dynamic)' : 'VOD (static)'}`);
+  add(`Segmentadressering: ${s.segmentAddressing}`);
+  add(`Segmentlängd: ${fmtDuration(s.segmentDurationSec)}`);
+  add(`Antal segment: ${s.segmentCount != null ? fmtInt(s.segmentCount) : '–'}${s.isLive ? ' (uppskattat)' : ''}`);
+  add(`Fönster / DVR-djup: ${fmtDuration(s.windowSeconds)}`);
+  add(`minBufferTime: ${fmtDuration(s.minBufferTimeSec)}`);
+  add(`minimumUpdatePeriod: ${s.minimumUpdatePeriodSec != null ? fmtDuration(s.minimumUpdatePeriodSec) : '–'}`);
+  add(`mediaPresentationDuration: ${fmtDuration(s.mediaPresentationDurationSec)}`);
+  add(
+    `Kryptering: ${
+      (s.contentProtection || []).length
+        ? s.contentProtection.map((cp) => `${cp.schemeIdUri || '?'}${cp.value ? ` (${cp.value})` : ''}`).join(', ')
+        : 'Av'
+    }`
+  );
+  add(`Segmentformat: ${s.fmp4 ? 'Fragmenterad MP4 (fMP4)' : 'Inget separat init-segment'}`);
+  if (s.initUri) add(`Init-segment: ${s.initUri}`);
+  add('');
+
+  const l = data.latency;
+  add('LATENS');
+  if (!l.available) {
+    add(l.reason || 'Latens kan inte beräknas.');
+  } else {
+    add(`Beräkningsmetod: ${l.method === 'declared' ? 'Deklarerad i manifestet' : 'Uppskattad från segmentlängd'}`);
+    add(`availabilityStartTime: ${fmtDateTime(l.availabilityStartTime)}${l.epochAnchored ? ' (epoch-förankrad)' : ''}`);
+    add(`publishTime: ${fmtDateTime(l.publishTime)}`);
+    add(
+      `Manifestets ålder: ${
+        l.manifestAgeSec != null ? fmtDuration(l.manifestAgeSec) : l.epochAnchored ? 'ej tillgänglig (epoch)' : '–'
+      }`
+    );
+    add(`suggestedPresentationDelay: ${l.suggestedPresentationDelaySec != null ? fmtDuration(l.suggestedPresentationDelaySec) : 'Hittades inte'}`);
+    add(`Uppskattad live-fördröjning: ${fmtDuration(l.estimatedLiveDelaySec)}${l.method === 'estimated' ? ' (grov)' : ''}`);
+    add(`timeShiftBufferDepth: ${fmtDuration(l.timeShiftBufferDepthSec)}`);
+  }
+  add('');
+
+  const b = data.bitrate;
+  add('UPPMÄTT BITRATE');
+  add(`Snitt (uppmätt): ${b.averageMeasuredBitrateKbps ? fmtNumber(b.averageMeasuredBitrateKbps) + ' kbit/s' : '–'}`);
+  add(`Deklarerad bandbredd: ${b.declaredBandwidthKbps ? fmtNumber(b.declaredBandwidthKbps) + ' kbit/s' : 'okänd'}`);
+  if (b.samples?.length) {
+    add('Uppmätta segmentprov (storlek, bitrate):');
+    b.samples.forEach((samp) => {
+      add(`  ${samp.ok ? fmtInt(samp.bytes) + ' B  ' + fmtNumber(samp.bitrateKbps) + ' kbit/s' : 'misslyckades'}  ${samp.uri}`);
+    });
+  }
+  add('');
+
+  add('NU SPELAS (ID3)');
+  if (sampleError) {
+    add(`Kunde inte hämtas: ${sampleError.message}`);
+  } else if (sample) {
+    if (!sample.id3.available) {
+      add(
+        `Ingen ID3-metadata hittades (inspelning: ${fmtDuration(sample.actualDurationSec)}, uppmätt ${fmtNumber(
+          sample.measuredBitrateKbps
+        )} kbit/s).`
+      );
+    } else {
+      sample.id3.frames.forEach((f) => add(`  ${fmtDuration(f.ptsTime)}: ${JSON.stringify(f.tags)}`));
+    }
+  } else {
+    add('Hämtades inte (analysen avbröts eller väntar fortfarande).');
+  }
+
+  const errorEntries = Object.entries(data.errors || {});
+  if (errorEntries.length) {
+    add('');
+    add('VARNINGAR (delvis resultat)');
+    errorEntries.forEach(([key, e]) => add(`- ${key}: ${e.message}`));
+  }
+
+  return lines.join('\n');
+}
+
 // ---------------------------------------------------------------------
 // Main flow: the Analyze button runs /api/analyze and then /api/sample
 // in sequence, and renders everything into #results. Clicking a variant row (see
@@ -693,21 +952,34 @@ async function runAnalysis(targetUrl, { isVariantSwitch = false } = {}) {
     return;
   }
 
-  if (!isVariantSwitch) {
-    baseVariantsInfo = data.variants;
+  if (data.streamKind === 'dash') {
+    resultsEl.innerHTML =
+      renderWarnings(data.errors) +
+      renderConnection(data.connection) +
+      renderNetworkPath(data.networkPath) +
+      renderDashRepresentations(data.representations) +
+      renderAudio(data.audio) +
+      renderDashSegments(data.segments) +
+      renderDashLatency(data.latency) +
+      renderBitrate(data.bitrate) +
+      renderId3Placeholder() +
+      renderDashManifest(data.manifests);
+  } else {
+    if (!isVariantSwitch) {
+      baseVariantsInfo = data.variants;
+    }
+    resultsEl.innerHTML =
+      renderWarnings(data.errors) +
+      renderConnection(data.connection) +
+      renderNetworkPath(data.networkPath) +
+      renderVariants(baseVariantsInfo, currentAnalyzedUrl) +
+      renderAudio(data.audio) +
+      renderSegments(data.segments, data.continuity) +
+      renderLatency(data.latency, data.lowLatency) +
+      renderBitrate(data.bitrate) +
+      renderId3Placeholder() +
+      renderManifests(data.manifests);
   }
-
-  resultsEl.innerHTML =
-    renderWarnings(data.errors) +
-    renderConnection(data.connection) +
-    renderNetworkPath(data.networkPath) +
-    renderVariants(baseVariantsInfo, currentAnalyzedUrl) +
-    renderAudio(data.audio) +
-    renderSegments(data.segments, data.continuity) +
-    renderLatency(data.latency, data.lowLatency) +
-    renderBitrate(data.bitrate) +
-    renderId3Placeholder() +
-    renderManifests(data.manifests);
 
   lastAnalyzeData = data;
   copyBtn.disabled = false;
@@ -715,7 +987,8 @@ async function runAnalysis(targetUrl, { isVariantSwitch = false } = {}) {
   statusEl.textContent = 'Hämtar nu spelas…';
   const id3Section = document.getElementById('sec-id3');
   try {
-    const sampleUrl = '/api/sample?url=' + encodeURIComponent(data.variants.chosenVariantUrl) + '&secs=8';
+    const sampleTarget = data.sampleUrl || data.variants?.chosenVariantUrl;
+    const sampleUrl = '/api/sample?url=' + encodeURIComponent(sampleTarget) + '&secs=8';
     const res = await fetch(sampleUrl);
     const body = await res.json();
     if (res.ok) {

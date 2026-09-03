@@ -14,7 +14,8 @@ import { promisify } from 'node:util';
 import geoip from 'geoip-lite';
 import ipaddr from 'ipaddr.js';
 import { Agent, buildConnector } from 'undici';
-import { parseM3U8 } from './parser.js';
+import { parseM3U8, resolveUrl } from './parser.js';
+import { parseMpd } from './dashParser.js';
 
 const dnsLookupAsync = promisify(dnsLookup);
 
@@ -58,6 +59,15 @@ export class UpstreamHttpError extends AppError {
 export class InvalidManifestError extends AppError {
   constructor(url, preview) {
     super('INVALID_MANIFEST', 'Svaret ser inte ut som en giltig M3U8-fil (saknar #EXTM3U).', {
+      url,
+      preview,
+    });
+  }
+}
+
+export class InvalidMpdError extends AppError {
+  constructor(url, preview) {
+    super('INVALID_MPD', 'Svaret ser inte ut som ett giltigt MPD-manifest (DASH).', {
       url,
       preview,
     });
@@ -269,6 +279,78 @@ export async function fetchHeaders(url) {
   };
 }
 
+// ---------------------------------------------------------------------------
+// Stream-type sniffing - the dispatch point for analyze()
+// ---------------------------------------------------------------------------
+
+/**
+ * Reads at most `maxBytes` off the response body, then cancels the rest of the
+ * stream. cancel(), never drain: a live Icecast/SHOUTcast body never ends, so
+ * reading it to completion would hang. A wall-clock deadline guards against a
+ * server that dribbles bytes slowly.
+ */
+async function readBodyPrefix(response, maxBytes, timeoutMs = TIMEOUT_MS) {
+  const reader = response.body?.getReader();
+  if (!reader) return '';
+  const chunks = [];
+  let total = 0;
+  let timer;
+  // One unref'd deadline timer for the whole loop (not one per iteration).
+  const timeout = new Promise((resolve) => {
+    timer = setTimeout(() => resolve(null), timeoutMs);
+    timer.unref?.();
+  });
+  try {
+    while (total < maxBytes) {
+      const result = await Promise.race([reader.read(), timeout]);
+      if (!result || result.done || !result.value) break; // null = timed out
+      chunks.push(Buffer.from(result.value));
+      total += result.value.length;
+    }
+  } finally {
+    clearTimeout(timer);
+    await reader.cancel().catch(() => {});
+  }
+  return Buffer.concat(chunks).subarray(0, maxBytes).toString('utf8');
+}
+
+/**
+ * One GET, then decide what kind of stream the URL is:
+ *  - Level 1: Content-Type alone (dash+xml / mpegurl) - body cancelled immediately.
+ *  - Level 2: unclear Content-Type - peek at up to ~4 KB and look for #EXTM3U or <MPD.
+ *  - Neither: 'unknown' (the caller falls back to the HLS path, which fails
+ *    with a readable INVALID_MANIFEST if it really isn't HLS).
+ *
+ * A deliberate extra GET: analyzeHls()/analyzeDash() then do their own fetches.
+ * Keeping the paths independent (each testable in isolation) is worth one more
+ * round-trip - see plan.md.
+ */
+export async function sniffStreamKind(url) {
+  const response = await fetchWithTimeout(url, { method: 'GET' });
+  const headers = headersToObject(response.headers);
+  const contentType = (headers['content-type'] || '').toLowerCase();
+  const finalUrl = response.url || url;
+
+  const isDashType = contentType.includes('dash+xml') || contentType.includes('vnd.mpeg.dash.mpd');
+  const isHlsType =
+    contentType.includes('mpegurl') || contentType.includes('vnd.apple.mpegurl') || contentType.includes('x-mpegurl');
+
+  if (isDashType || isHlsType) {
+    await response.body?.cancel().catch(() => {});
+    return { kind: isDashType ? 'dash' : 'hls', contentType, finalUrl, matchedOn: 'content-type' };
+  }
+
+  const peek = await readBodyPrefix(response, 4096);
+  const trimmed = peek.replace(/^\uFEFF/, '').trimStart(); // strip a leading BOM
+  if (trimmed.startsWith('#EXTM3U')) {
+    return { kind: 'hls', contentType, finalUrl, matchedOn: 'body' };
+  }
+  if (/<(?:[\w-]+:)?MPD[\s/>]/.test(peek)) {
+    return { kind: 'dash', contentType, finalUrl, matchedOn: 'body' };
+  }
+  return { kind: 'unknown', contentType, finalUrl, matchedOn: 'none', peek: peek.slice(0, 500) };
+}
+
 // Generic patterns for headers that reveal which CDN node/edge server
 // responded - covers Akamai, Cloudflare (cf-*), CloudFront (x-amz-cf-*) and
 // common generic cache/edge conventions, rather than hardcoding a specific CDN.
@@ -373,6 +455,22 @@ export async function getManifest(url) {
   const parsed = parseM3U8(text, finalUrl);
   if (parsed.type === 'unknown') {
     throw new InvalidManifestError(url, text.split(/\r?\n/).slice(0, 10).join('\n'));
+  }
+
+  return { url, finalUrl, raw: text, parsed };
+}
+
+/**
+ * Fetches and parses an MPD (DASH manifest). Analogous to getManifest():
+ * throws InvalidMpdError if the body doesn't parse as an MPD with at least
+ * one Period.
+ */
+export async function getMpd(url) {
+  const { finalUrl, text } = await fetchManifestRaw(url);
+
+  const parsed = parseMpd(text, finalUrl);
+  if (parsed.type !== 'dash' || !parsed.periods.length) {
+    throw new InvalidMpdError(url, text.split(/\r?\n/).slice(0, 12).join('\n'));
   }
 
   return { url, finalUrl, raw: text, parsed };
@@ -797,9 +895,20 @@ export async function checkBinaryAvailable(binary) {
 
 // ---------------------------------------------------------------------------
 // Combined analysis for POST /api/analyze
+//
+// analyze() sniffs the stream type once and dispatches. Each stream kind gets
+// its own top-level function that owns its fetches and returns a shape tagged
+// with `streamKind` for the frontend to branch on. HLS is the original path,
+// renamed; DASH is analyzeDash() below.
 // ---------------------------------------------------------------------------
 
 export async function analyze(url) {
+  const kind = await sniffStreamKind(url);
+  if (kind.kind === 'dash') return analyzeDash(url);
+  return analyzeHls(url);
+}
+
+export async function analyzeHls(url) {
   const errors = {};
 
   const connection = await fetchHeaders(url);
@@ -835,15 +944,18 @@ export async function analyze(url) {
   }
 
   const variants = master?.parsed.variants || [];
+  const chosenVariantUrl = chosenVariant?.url || media.finalUrl;
 
   return {
+    streamKind: 'hls',
     requestedUrl: url,
+    sampleUrl: chosenVariantUrl,
     connection,
     variants: {
       hasMasterPlaylist: Boolean(master),
       list: variants,
       singleVariantNote: !master || variants.length <= 1,
-      chosenVariantUrl: chosenVariant?.url || media.finalUrl,
+      chosenVariantUrl,
     },
     audio,
     segments,
@@ -855,6 +967,414 @@ export async function analyze(url) {
     manifests: {
       master: master ? { url: master.finalUrl, raw: master.raw } : null,
       media: { url: media.finalUrl, raw: media.raw },
+    },
+    errors,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// DASH analysis - same depth as the HLS path, but a genuinely different shape.
+// ---------------------------------------------------------------------------
+
+/**
+ * Picks the Representation to analyse: FIRST Period -> first AdaptationSet whose
+ * contentType is 'audio' (or mimeType audio/*) -> FIRST Representation in it.
+ * Deliberately "first", not "highest bandwidth" - mirrors the HLS path's
+ * chosenVariant = variants[0] convention. Falls back to the first Representation
+ * of any kind so an audio-only MPD that omits contentType still analyses.
+ */
+export function chooseDashAudioRepresentation(parsedMpd) {
+  const period = parsedMpd.periods[0];
+  if (!period) return null;
+
+  const audioSet =
+    period.adaptationSets.find((as) => as.contentType === 'audio') ||
+    period.adaptationSets.find((as) => (as.mimeType || '').startsWith('audio/')) ||
+    period.adaptationSets.find((as) => as.representations.some((r) => (r.mimeType || '').startsWith('audio/')));
+
+  const set = audioSet || period.adaptationSets.find((as) => as.representations.length);
+  if (!set || !set.representations.length) return null;
+
+  return { period, adaptationSet: set, representation: set.representations[0] };
+}
+
+// $Number$, $Number%05d$, $Time$, $RepresentationID$, $Bandwidth$, $$ -> literal
+function substituteTemplate(template, { representationId, bandwidth, number, time } = {}) {
+  if (!template) return template;
+  return template.replace(/\$(RepresentationID|Number|Time|Bandwidth)(%0\d+d)?\$|\$\$/g, (match, token, fmt) => {
+    if (match === '$$') return '$';
+    let value;
+    if (token === 'RepresentationID') value = representationId ?? '';
+    else if (token === 'Bandwidth') value = bandwidth ?? '';
+    else if (token === 'Number') value = number ?? '';
+    else if (token === 'Time') value = time ?? '';
+    else return match;
+    if (fmt) return String(value).padStart(Number(fmt.slice(2, -1)), '0');
+    return String(value);
+  });
+}
+
+/**
+ * The most substantial new piece. Turns a Representation's segment addressing
+ * into concrete, fetchable URLs in EXACTLY the { segments: [{ uri, duration }] }
+ * shape measureSegmentBitrates() already consumes (that function is reused
+ * unchanged). Handles the three DASH addressing modes:
+ *   - SegmentTemplate + $Number$ (fixed duration)  -> compute the number window
+ *   - SegmentTemplate + SegmentTimeline (<S t d r>) -> enumerate directly
+ *   - SegmentList (<SegmentURL media>)              -> enumerate directly
+ * Also returns the init segment URI and which mode was used.
+ */
+export function generateDashSegmentUrls(period, adaptationSet, representation, mpdInfo, count = 12) {
+  const st = representation.segmentTemplate;
+  const sl = representation.segmentList;
+  const repId = representation.id;
+  const bw = representation.bandwidth;
+  let initUri = null;
+
+  // --- SegmentTemplate + SegmentTimeline ---
+  if (st && Array.isArray(st.timeline) && st.timeline.length) {
+    const timescale = st.timescale || 1;
+    const startNumber = st.startNumber ?? 1;
+
+    // Pass 1: bounded arithmetic only - the running (number, time) at the start
+    // of each <S> block and the grand total, without materialising any URLs.
+    // r < 0 ("repeat until the next <S> or the Period end") can't be resolved
+    // from the manifest alone at a live edge, so it counts as no repeat. This
+    // pass never loops over `r`, so a hostile <S d="1" r="999999999"> is just
+    // one addition, not a billion iterations.
+    let runNumber = startNumber;
+    let runTime = st.timeline[0].t ?? 0;
+    let totalSegments = 0;
+    const blocks = st.timeline.map((s) => {
+      if (s.t != null) runTime = s.t;
+      const segs = s.r != null && s.r > 0 ? s.r + 1 : 1;
+      const block = { startNumber: runNumber, startTime: runTime, d: s.d, segs };
+      runNumber += segs;
+      runTime += (s.d || 0) * segs;
+      totalSegments += segs;
+      return block;
+    });
+
+    // Pass 2: materialise only the last `count` segments; skip whole blocks that
+    // fall entirely before the window (so the inner loop runs <= `count` times).
+    const firstWanted = Math.max(0, totalSegments - count);
+    const all = [];
+    let seen = 0;
+    for (const b of blocks) {
+      if (seen + b.segs <= firstWanted) {
+        seen += b.segs;
+        continue;
+      }
+      for (let k = Math.max(0, firstWanted - seen); k < b.segs; k++) {
+        all.push({
+          uri: resolveUrl(
+            st.baseUrl,
+            substituteTemplate(st.media, {
+              representationId: repId,
+              bandwidth: bw,
+              number: b.startNumber + k,
+              time: b.startTime + (b.d || 0) * k,
+            })
+          ),
+          duration: b.d != null ? b.d / timescale : null,
+        });
+      }
+      seen += b.segs;
+    }
+    if (st.initialization) {
+      initUri = resolveUrl(st.baseUrl, substituteTemplate(st.initialization, { representationId: repId, bandwidth: bw }));
+    }
+    return { segments: all, initUri, mode: 'SegmentTimeline' };
+  }
+
+  // --- SegmentTemplate + $Number$ with a fixed duration ---
+  if (st && st.media && st.duration) {
+    const timescale = st.timescale || 1;
+    const segSec = st.duration / timescale;
+    const startNumber = st.startNumber ?? 1;
+    let firstNumber = startNumber;
+    let lastNumber = startNumber + count - 1;
+
+    if (mpdInfo.presentationType === 'dynamic' && mpdInfo.availabilityStartTime) {
+      const astMs = Date.parse(mpdInfo.availabilityStartTime);
+      if (!Number.isNaN(astMs)) {
+        const elapsedSec = (Date.now() - astMs) / 1000 - (period.startSec || 0);
+        const liveIndex = Math.floor(elapsedSec / segSec);
+        lastNumber = startNumber + Math.max(0, liveIndex - 1); // newest fully-available segment
+        firstNumber = Math.max(startNumber, lastNumber - count + 1);
+      }
+    } else {
+      const totalSec = period.durationSec || mpdInfo.mediaPresentationDurationSec || null;
+      if (totalSec) {
+        const totalSegments = Math.ceil(totalSec / segSec);
+        lastNumber = startNumber + Math.max(0, totalSegments - 1);
+        firstNumber = Math.max(startNumber, lastNumber - count + 1);
+      }
+    }
+
+    const all = [];
+    for (let n = firstNumber; n <= lastNumber; n++) {
+      all.push({
+        uri: resolveUrl(st.baseUrl, substituteTemplate(st.media, { representationId: repId, bandwidth: bw, number: n })),
+        duration: segSec,
+      });
+    }
+    if (st.initialization) {
+      initUri = resolveUrl(st.baseUrl, substituteTemplate(st.initialization, { representationId: repId, bandwidth: bw }));
+    }
+    return { segments: all, initUri, mode: 'SegmentTemplate' };
+  }
+
+  // --- SegmentList ---
+  if (sl && Array.isArray(sl.segmentUrls) && sl.segmentUrls.length) {
+    const timescale = sl.timescale || 1;
+    const segSec = sl.duration ? sl.duration / timescale : null;
+    const segments = sl.segmentUrls.map((u) => ({ uri: resolveUrl(sl.baseUrl, u.media), duration: segSec }));
+    if (sl.initialization) initUri = resolveUrl(sl.baseUrl, sl.initialization);
+    return { segments: segments.slice(-count), initUri, mode: 'SegmentList' };
+  }
+
+  // --- Single-file Representation (plain BaseURL / SegmentBase) ---
+  if (representation.baseUrl) {
+    return {
+      segments: [{ uri: representation.baseUrl, duration: period.durationSec || mpdInfo.mediaPresentationDurationSec || null }],
+      initUri: null,
+      mode: 'BaseURL',
+    };
+  }
+
+  return { segments: [], initUri: null, mode: 'none' };
+}
+
+/**
+ * Analogous to computeSegmentStats(): segment length, count, window in seconds,
+ * isLive (from presentationType), encrypted (from contentProtection), fMP4.
+ */
+export function computeDashSegmentStats(parsedMpd, chosen) {
+  const { period, representation } = chosen;
+  const st = representation.segmentTemplate;
+  const sl = representation.segmentList;
+
+  let segmentDurationSec = null;
+  let segmentCount = null;
+  let windowSeconds = null;
+  let addressing = 'okänd';
+
+  if (st && Array.isArray(st.timeline) && st.timeline.length) {
+    addressing = 'SegmentTimeline';
+    const timescale = st.timescale || 1;
+    let total = 0;
+    let cnt = 0;
+    for (const s of st.timeline) {
+      const times = (s.r != null && s.r > 0 ? s.r : 0) + 1;
+      if (s.d != null) total += (s.d / timescale) * times;
+      cnt += times;
+    }
+    windowSeconds = total || null;
+    segmentCount = cnt || null;
+    segmentDurationSec = cnt ? total / cnt : null;
+  } else if (st && st.duration) {
+    addressing = 'SegmentTemplate ($Number$)';
+    segmentDurationSec = st.duration / (st.timescale || 1);
+    if (parsedMpd.presentationType === 'static') {
+      windowSeconds = period.durationSec || parsedMpd.mediaPresentationDurationSec || null;
+      segmentCount = windowSeconds ? Math.ceil(windowSeconds / segmentDurationSec) : null;
+    } else {
+      windowSeconds = parsedMpd.timeShiftBufferDepthSec || null;
+      segmentCount = windowSeconds ? Math.round(windowSeconds / segmentDurationSec) : null;
+    }
+  } else if (sl && Array.isArray(sl.segmentUrls) && sl.segmentUrls.length) {
+    addressing = 'SegmentList';
+    segmentCount = sl.segmentUrls.length;
+    segmentDurationSec = sl.duration ? sl.duration / (sl.timescale || 1) : null;
+    windowSeconds = segmentDurationSec ? segmentDurationSec * segmentCount : null;
+  } else if (representation.baseUrl) {
+    addressing = 'Enkel fil (BaseURL/SegmentBase)';
+    windowSeconds = period.durationSec || parsedMpd.mediaPresentationDurationSec || null;
+    segmentCount = 1;
+  }
+
+  const hasInit = Boolean(st?.initialization || sl?.initialization);
+
+  return {
+    presentationType: parsedMpd.presentationType,
+    isLive: parsedMpd.presentationType === 'dynamic',
+    segmentAddressing: addressing,
+    segmentDurationSec,
+    segmentCount,
+    windowSeconds,
+    minBufferTimeSec: parsedMpd.minBufferTimeSec,
+    timeShiftBufferDepthSec: parsedMpd.timeShiftBufferDepthSec,
+    minimumUpdatePeriodSec: parsedMpd.minimumUpdatePeriodSec,
+    suggestedPresentationDelaySec: parsedMpd.suggestedPresentationDelaySec,
+    mediaPresentationDurationSec: parsedMpd.mediaPresentationDurationSec,
+    encrypted: representation.contentProtection.length > 0,
+    contentProtection: representation.contentProtection,
+    fmp4: hasInit,
+    initUri: null, // filled in by analyzeDash from generateDashSegmentUrls
+    periodCount: parsedMpd.periodCount,
+    periodId: period.id,
+    periodIndex: period.index,
+  };
+}
+
+/**
+ * Analogous to computeLatency(). For a dynamic MPD: availabilityStartTime +
+ * period start vs. the wall clock, plus the manifest's own age (publishTime).
+ * For a static (VOD) MPD -> { available: false }.
+ */
+export function computeDashLatency(parsedMpd, chosen) {
+  if (parsedMpd.presentationType !== 'dynamic') {
+    return { available: false, reason: 'VOD (static MPD) - ingen live-fördröjning att beräkna.' };
+  }
+  const astMs = parsedMpd.availabilityStartTime ? Date.parse(parsedMpd.availabilityStartTime) : NaN;
+  if (Number.isNaN(astMs)) {
+    return { available: false, reason: 'availabilityStartTime saknas eller kunde inte tolkas.' };
+  }
+
+  const { period, representation } = chosen;
+  const st = representation.segmentTemplate;
+  const nowSec = Date.now() / 1000;
+  const periodStartSec = period.startSec || 0;
+
+  let segDurationSec = null;
+  if (st && Array.isArray(st.timeline) && st.timeline.length) {
+    const last = st.timeline[st.timeline.length - 1];
+    if (last.d != null) segDurationSec = last.d / (st.timescale || 1);
+  } else if (st && st.duration) {
+    segDurationSec = st.duration / (st.timescale || 1);
+  }
+
+  const result = {
+    available: true,
+    method: parsedMpd.suggestedPresentationDelaySec != null ? 'declared' : 'estimated',
+    availabilityStartTime: parsedMpd.availabilityStartTime,
+    publishTime: parsedMpd.publishTime || null,
+    periodStartSec,
+    segmentDurationSec: segDurationSec,
+    suggestedPresentationDelaySec: parsedMpd.suggestedPresentationDelaySec,
+    minBufferTimeSec: parsedMpd.minBufferTimeSec,
+    timeShiftBufferDepthSec: parsedMpd.timeShiftBufferDepthSec,
+    minimumUpdatePeriodSec: parsedMpd.minimumUpdatePeriodSec,
+    manifestAgeSec: null,
+    epochAnchored: astMs < Date.parse('2000-01-01T00:00:00Z'),
+  };
+
+  // Rough target latency a player would sit at: the declared
+  // suggestedPresentationDelay if present, otherwise ~3 segments of buffer.
+  result.estimatedLiveDelaySec =
+    parsedMpd.suggestedPresentationDelaySec ?? (segDurationSec ? segDurationSec * 3 : parsedMpd.minBufferTimeSec);
+
+  // Manifest age = now - publishTime, but only when it lands in a plausible
+  // range. Simulated-live sources (dashif livesim, etc.) anchor publishTime to
+  // the epoch, which would otherwise read as a 50-year-old manifest.
+  if (parsedMpd.publishTime) {
+    const ptMs = Date.parse(parsedMpd.publishTime);
+    if (!Number.isNaN(ptMs)) {
+      const ageSec = nowSec - ptMs / 1000;
+      if (ageSec >= -60 && ageSec < 86400) result.manifestAgeSec = ageSec;
+    }
+  }
+  return result;
+}
+
+// Flat Representation list for the "Representations" card - every Representation
+// in the analysed Period, with the chosen one flagged.
+function buildDashRepresentationList(parsedMpd, chosen) {
+  const { period } = chosen;
+  const list = [];
+  for (const as of period.adaptationSets) {
+    for (const r of as.representations) {
+      list.push({
+        id: r.id,
+        adaptationSetId: as.id,
+        contentType: as.contentType,
+        mimeType: r.mimeType || as.mimeType,
+        lang: as.lang,
+        bandwidthKbps: r.bandwidth ? r.bandwidth / 1000 : null,
+        codecs: r.codecs,
+        audioSamplingRate: r.audioSamplingRate,
+        width: r.width,
+        height: r.height,
+        chosen: r === chosen.representation,
+      });
+    }
+  }
+  return {
+    list,
+    chosenId: chosen.representation.id,
+    periodCount: parsedMpd.periodCount,
+    periodId: period.id,
+    periodIndex: period.index,
+    multiPeriodNote:
+      parsedMpd.periodCount > 1
+        ? `MPD:n har ${parsedMpd.periodCount} perioder. Endast Period ${period.index + 1} (id "${period.id}") analyseras i v1 - övriga perioders data blandas inte in.`
+        : null,
+    xlinkNote: period.hasXlink ? 'Den analyserade perioden refererar en extern (xlink) period - utanför scope i v1.' : null,
+  };
+}
+
+/**
+ * Combined DASH analysis. Reuses fetchHeaders, measureSegmentBitrates,
+ * runFfprobe, computeNetworkPath and resolveDnsAddresses unchanged; each in its
+ * own isolated try/catch so one failure degrades to a warning, same as
+ * analyzeHls().
+ */
+export async function analyzeDash(url) {
+  const errors = {};
+
+  const connection = await fetchHeaders(url);
+
+  const mpd = await getMpd(url); // fatal on an invalid MPD, like getManifest() for HLS
+
+  const chosen = chooseDashAudioRepresentation(mpd.parsed);
+  if (!chosen) {
+    throw new InvalidMpdError(url, 'MPD:ns första Period innehåller ingen Representation att analysera.');
+  }
+
+  const segments = computeDashSegmentStats(mpd.parsed, chosen);
+  const latency = computeDashLatency(mpd.parsed, chosen);
+
+  const generated = generateDashSegmentUrls(chosen.period, chosen.adaptationSet, chosen.representation, mpd.parsed, 12);
+  segments.initUri = generated.initUri;
+  segments.generatedSegmentMode = generated.mode;
+
+  let bitrate = { samples: [], averageMeasuredBitrateKbps: null };
+  try {
+    bitrate = await measureSegmentBitrates(generated);
+  } catch (err) {
+    errors.bitrate = { message: err.message, code: err.code || 'UNKNOWN' };
+  }
+  bitrate.declaredBandwidthKbps = chosen.representation.bandwidth ? chosen.representation.bandwidth / 1000 : null;
+
+  let audio = null;
+  try {
+    const probe = await runFfprobe(mpd.finalUrl);
+    audio = probe.audio;
+  } catch (err) {
+    errors.ffprobe = { message: err.message, code: err.code || 'UNKNOWN', details: err.details };
+  }
+
+  const networkPath = computeNetworkPath(connection.allHeaders);
+  try {
+    networkPath.dns = await resolveDnsAddresses(new URL(mpd.finalUrl).hostname);
+  } catch (err) {
+    networkPath.dns = { hostname: null, addresses: [], family: null, error: err.message };
+  }
+
+  return {
+    streamKind: 'dash',
+    requestedUrl: url,
+    sampleUrl: mpd.finalUrl,
+    connection,
+    representations: buildDashRepresentationList(mpd.parsed, chosen),
+    audio,
+    segments,
+    latency,
+    bitrate,
+    networkPath,
+    manifests: {
+      mpd: { url: mpd.finalUrl, raw: mpd.raw },
     },
     errors,
   };

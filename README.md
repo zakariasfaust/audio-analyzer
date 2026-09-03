@@ -1,10 +1,13 @@
 # Audio Analyzer
 
-A small tool for analyzing audio streams (currently HLS/`.m3u8`) -
+A small tool for analyzing audio streams (HLS/`.m3u8` and MPEG-DASH/`.mpd`) -
 designed especially for radio streams behind CDNs like Akamai.
 Paste in a manifest URL and get a combined status snapshot: connection/CORS,
-variants, audio codec, segments and buffer, latency, measured bitrate,
-"now playing" ID3, and the raw manifest.
+variants (HLS) or representations (DASH), audio codec, segments and buffer,
+latency, measured bitrate, "now playing" ID3, and the raw manifest.
+
+The stream type is detected automatically from the response (Content-Type,
+then a small body peek), so the same URL field takes either format.
 
 ## Why a backend?
 
@@ -41,15 +44,23 @@ in a `.m3u8` URL, and click Analyze.
 ## Testing
 
 There are no automated tests. Manual verification:
-1. `npm start`, open the page, click Analyze on the prefilled example URL.
+1. `npm start`, open the page, analyze a known HLS `.m3u8` URL and a known
+   DASH `.mpd` URL - both should render the full set of section cards.
 2. Test a failure case by pasting in a URL that returns 404 or points to
-   a page that isn't an M3U8 - the error should display readably, the page should never
-   go blank.
+   a page that is neither an M3U8 nor an MPD - the error should display readably,
+   the page should never go blank.
 
 ## Good to know
 
 - **Status snapshot, not live** - each click on Analyze makes a new request.
   The page doesn't poll or update automatically.
+- **DASH support** analyses the first audio representation of the first
+  Period, the same "first, not best" choice the HLS path makes for variants.
+  Known v1 limitations, surfaced in the UI rather than hidden: only the first
+  Period is analysed (a note is shown when there are more), remote/`xlink`
+  Periods are out of scope, and DRM-protected streams show the protection
+  scheme but the audio section then fails predictably (ffprobe can't decrypt).
+  Segment counts for live DASH are estimated from the manifest, not listed.
 - **"Only one variant"** - many radio streams lack a separate
   master playlist; the URL then points directly at the media playlist. This is flagged
   in the UI instead of showing an empty variant table.
