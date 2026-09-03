@@ -180,4 +180,6 @@ const STREAM_TERMS = {
     'Verktyget spelar in några sekunder av strömmen och mäter den faktiska datamängden per sekund. Letar även efter ID3-ramar - ovanligt för Icecast, där låttiteln normalt kommer via icy-metadata istället.',
   'inspelad-langd':
     'Hur många sekunder som faktiskt spelades in för mätningen - kan bli kortare än begärt om strömmen hackade eller anslutningen bröts.',
+  'connect-burst':
+    'När en lyssnare ansluter skickar Icecast/SHOUTcast/RSAS direkt en klump redan buffrat ljud så uppspelningen kan starta snabbt, och strypar sedan till realtid. Verktyget spelar in strömmen så fort servern skickar och jämför inspelad speltid med väggklockstid — mellanskillnaden är den bufferten, dvs. ungefär hur långt efter sändningen en ny lyssnare börjar. Grov nedre gräns: anslutningstid, nätverksfart och eventuella reläservrar spär på osäkerheten, och "minst" betyder att hela provet rymdes i bufferten så den egentligen är större.',
 };

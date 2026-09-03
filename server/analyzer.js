@@ -965,7 +965,9 @@ export async function sampleStream(url, requestedSeconds = 8, { signal } = {}) {
   ];
 
   try {
+    const recordStartMs = Date.now();
     const rec = await runChildProcess('ffmpeg', ffmpegArgs, { timeoutMs: secs * 1000 + TIMEOUT_MS, signal });
+    const recordWallSec = (Date.now() - recordStartMs) / 1000;
     if (rec.timedOut) throw new TimeoutError(url);
 
     let stat;
@@ -1005,6 +1007,19 @@ export async function sampleStream(url, requestedSeconds = 8, { signal } = {}) {
     const fileSizeBytes = Number(format.size) || stat?.size || 0;
     const measuredBitrateKbps = actualDurationSec > 0 ? (fileSizeBytes * 8) / 1000 / actualDurationSec : null;
 
+    // Continuous streams (Icecast/SHOUTcast/RSAS, plain progressive HTTP) hand a
+    // fresh client a "burst" of already-buffered audio the instant it connects,
+    // then throttle to real time. If we captured actualDurationSec of audio in
+    // noticeably less wall-clock time, that gap is audio the server had sitting
+    // in its buffer - a lower bound on how far behind live a new listener starts.
+    // Rough: ffmpeg connect/startup overhead inflates recordWallSec (so this
+    // under-reports), and network speed plus any relay/CDN hop blur it further.
+    // burstIsLowerBound = nearly the whole sample drained faster than real time,
+    // so the real burst is larger than our sample window. Only meaningful for a
+    // continuous stream; the frontend renders it for Icecast only.
+    const connectBurstSec = Math.max(0, actualDurationSec - recordWallSec);
+    const burstIsLowerBound = connectBurstSec >= actualDurationSec * 0.75;
+
     const frames = (framesJson.frames || []).map((f) => ({
       ptsTime: f.pts_time ? Number(f.pts_time) : null,
       tags: f.tags || null,
@@ -1013,6 +1028,9 @@ export async function sampleStream(url, requestedSeconds = 8, { signal } = {}) {
     return {
       requestedSeconds: secs,
       actualDurationSec,
+      recordWallSec,
+      connectBurstSec,
+      burstIsLowerBound,
       fileSizeBytes,
       measuredBitrateKbps,
       streams: simplifyProbeResult(probeJson),

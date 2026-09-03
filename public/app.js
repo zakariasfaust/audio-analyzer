@@ -587,11 +587,19 @@ function renderIcecastSample(sample, error) {
          .join('')}</tbody></table>`
     : '';
 
+  const burst =
+    typeof sample.connectBurstSec !== 'number' || sample.connectBurstSec < 1
+      ? 'ingen märkbar (strömmen levererades i realtid)'
+      : `${sample.burstIsLowerBound ? 'minst ' : '≈ '}${fmtDuration(sample.connectBurstSec)}${
+          sample.burstIsLowerBound ? ' (hela provet dränerades ur bufferten)' : ''
+        }`;
+
   return `
     ${head}
     <dl>
       ${withHint('dt', 'Uppmätt bitrate', 'snitt-uppmatt')}<dd>${sample.measuredBitrateKbps ? fmtNumber(sample.measuredBitrateKbps) + ' kbit/s' : '–'}</dd>
       ${withHint('dt', 'Inspelad längd', 'inspelad-langd')}<dd>${fmtDuration(sample.actualDurationSec)}</dd>
+      ${withHint('dt', 'Serverbuffert vid anslutning', 'connect-burst')}<dd>${burst}</dd>
       ${withHint('dt', 'Provets storlek', 'bytes')}<dd>${sample.fileSizeBytes ? fmtInt(sample.fileSizeBytes) + ' byte' : '–'}</dd>
       ${withHint('dt', 'Container', 'container')}<dd>${esc(s.container) || '–'}</dd>
     </dl>
@@ -1049,6 +1057,13 @@ function buildIcecastCopyText(data, sample, sampleError) {
   } else if (sample) {
     add(`Uppmätt bitrate: ${sample.measuredBitrateKbps ? fmtNumber(sample.measuredBitrateKbps) + ' kbit/s' : '–'}`);
     add(`Inspelad längd: ${fmtDuration(sample.actualDurationSec)}`);
+    add(
+      `Serverbuffert vid anslutning: ${
+        typeof sample.connectBurstSec !== 'number' || sample.connectBurstSec < 1
+          ? 'ingen märkbar (realtid)'
+          : `${sample.burstIsLowerBound ? 'minst ' : '≈ '}${fmtDuration(sample.connectBurstSec)}`
+      }`
+    );
     add(`Provets storlek: ${sample.fileSizeBytes ? fmtInt(sample.fileSizeBytes) + ' byte' : '–'}`);
     if (sample.id3 && sample.id3.available) {
       sample.id3.frames.forEach((f) => add(`  ID3 ${fmtDuration(f.ptsTime)}: ${JSON.stringify(f.tags)}`));
