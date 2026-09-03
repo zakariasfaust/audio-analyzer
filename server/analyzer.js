@@ -74,6 +74,27 @@ export class InvalidMpdError extends AppError {
   }
 }
 
+// A real M3U8/MPD is at most a few MB. Anything past this is a mistake or an
+// attack (a URL pointing at a large file), and an unbounded response.text()
+// on it is a memory-exhaustion vector - so we refuse it instead.
+export const MAX_MANIFEST_BYTES = 10 * 1024 * 1024;
+
+export class ManifestTooLargeError extends AppError {
+  constructor(url) {
+    super(
+      'MANIFEST_TOO_LARGE',
+      `Svaret är större än ${Math.round(MAX_MANIFEST_BYTES / 1024 / 1024)} MB - det är inte ett rimligt manifest och hämtas inte.`,
+      { url, limitBytes: MAX_MANIFEST_BYTES }
+    );
+  }
+}
+
+export class RequestAbortedError extends AppError {
+  constructor(message = 'Begäran avbröts.') {
+    super('REQUEST_ABORTED', message, {});
+  }
+}
+
 export class BinaryMissingError extends AppError {
   constructor(binary) {
     const mac = `brew install ffmpeg`;
@@ -204,30 +225,39 @@ const ssrfSafeAgent = new Agent({
 // ---------------------------------------------------------------------------
 
 async function fetchWithTimeout(url, options = {}) {
+  const { signal: externalSignal, ...rest } = options;
+  externalSignal?.throwIfAborted?.();
   await assertPublicHost(url);
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+
+  // AbortSignal.timeout fires TIMEOUT_MS after this call and stays live for the
+  // whole lifetime of the returned body stream - so a slow-drip body read is
+  // now bounded too, not just the initial response. Combined with the caller's
+  // request-scoped signal (client disconnect / hard deadline) when present.
+  const timeoutSignal = AbortSignal.timeout(TIMEOUT_MS);
+  const signal = externalSignal ? AbortSignal.any([externalSignal, timeoutSignal]) : timeoutSignal;
+
   try {
     return await fetch(url, {
       redirect: 'follow',
       dispatcher: ssrfSafeAgent,
-      ...options,
+      ...rest,
       headers: {
         'User-Agent': USER_AGENT,
         Accept: '*/*',
-        ...options.headers,
+        ...rest.headers,
       },
-      signal: controller.signal,
+      signal,
     });
   } catch (err) {
-    if (err.name === 'AbortError') throw new TimeoutError(url);
+    // fetch() rejects with the abort *reason* itself. A request-scoped abort
+    // carries our AppError (REQUEST_ABORTED / REQUEST_TIMEOUT) - pass it through.
+    if (err instanceof AppError) throw err;
+    if (err.name === 'AbortError' || err.name === 'TimeoutError') throw new TimeoutError(url);
     // undici wraps a connector rejection as TypeError('fetch failed', { cause }).
     // Surface our own HostBlockedError (from ssrfSafeAgent rejecting a redirect
     // hop into a private range) rather than the opaque wrapper.
     if (err?.cause instanceof AppError) throw err.cause;
     throw err;
-  } finally {
-    clearTimeout(timer);
   }
 }
 
@@ -243,8 +273,8 @@ function headersToObject(headers) {
  * Fetches only the HTTP headers for a URL (for the connection card).
  * Never reads out the whole body unnecessarily.
  */
-export async function fetchHeaders(url) {
-  const response = await fetchWithTimeout(url, { method: 'GET' });
+export async function fetchHeaders(url, { signal } = {}) {
+  const response = await fetchWithTimeout(url, { method: 'GET', signal });
   // We don't want to keep an open socket alive just for the headers' sake.
   await response.body?.cancel().catch(() => {});
 
@@ -289,26 +319,26 @@ export async function fetchHeaders(url) {
  * reading it to completion would hang. A wall-clock deadline guards against a
  * server that dribbles bytes slowly.
  */
-async function readBodyPrefix(response, maxBytes, timeoutMs = TIMEOUT_MS) {
+async function readBodyPrefix(response, maxBytes) {
   const reader = response.body?.getReader();
   if (!reader) return '';
   const chunks = [];
   let total = 0;
-  let timer;
-  // One unref'd deadline timer for the whole loop (not one per iteration).
-  const timeout = new Promise((resolve) => {
-    timer = setTimeout(() => resolve(null), timeoutMs);
-    timer.unref?.();
-  });
   try {
     while (total < maxBytes) {
-      const result = await Promise.race([reader.read(), timeout]);
-      if (!result || result.done || !result.value) break; // null = timed out
+      let result;
+      try {
+        // response.body is bound to the fetch signal (TIMEOUT_MS + any
+        // request-scoped signal), so a stalled or aborted read rejects here.
+        result = await reader.read();
+      } catch {
+        break; // timed out / aborted mid-peek - a partial guess is fine here
+      }
+      if (result.done || !result.value) break;
       chunks.push(Buffer.from(result.value));
       total += result.value.length;
     }
   } finally {
-    clearTimeout(timer);
     await reader.cancel().catch(() => {});
   }
   return Buffer.concat(chunks).subarray(0, maxBytes).toString('utf8');
@@ -325,8 +355,8 @@ async function readBodyPrefix(response, maxBytes, timeoutMs = TIMEOUT_MS) {
  * Keeping the paths independent (each testable in isolation) is worth one more
  * round-trip - see plan.md.
  */
-export async function sniffStreamKind(url) {
-  const response = await fetchWithTimeout(url, { method: 'GET' });
+export async function sniffStreamKind(url, { signal } = {}) {
+  const response = await fetchWithTimeout(url, { method: 'GET', signal });
   const headers = headersToObject(response.headers);
   const contentType = (headers['content-type'] || '').toLowerCase();
   const finalUrl = response.url || url;
@@ -430,12 +460,42 @@ export async function resolveDnsAddresses(hostname) {
 }
 
 /**
- * Fetches the raw manifest text. Throws UpstreamHttpError on a non-OK status
- * (with a body excerpt for debugging, e.g. Akamai's error pages).
+ * Reads a response body as text but aborts past `limitBytes` instead of
+ * buffering the whole thing - see MAX_MANIFEST_BYTES.
  */
-async function fetchManifestRaw(url) {
-  const response = await fetchWithTimeout(url, { method: 'GET' });
-  const text = await response.text();
+async function readBodyTextCapped(response, limitBytes, url) {
+  const reader = response.body?.getReader();
+  if (!reader) return '';
+  const chunks = [];
+  let total = 0;
+  try {
+    for (;;) {
+      let chunk;
+      try {
+        chunk = await reader.read();
+      } catch (err) {
+        if (err instanceof AppError) throw err;
+        throw new TimeoutError(url); // stalled or aborted read
+      }
+      if (chunk.done) break;
+      total += chunk.value.length;
+      if (total > limitBytes) throw new ManifestTooLargeError(url);
+      chunks.push(Buffer.from(chunk.value));
+    }
+  } finally {
+    await reader.cancel().catch(() => {});
+  }
+  return Buffer.concat(chunks).toString('utf8');
+}
+
+/**
+ * Fetches the raw manifest text. Throws UpstreamHttpError on a non-OK status
+ * (with a body excerpt for debugging, e.g. Akamai's error pages), or
+ * ManifestTooLargeError if the body blows past MAX_MANIFEST_BYTES.
+ */
+async function fetchManifestRaw(url, { signal } = {}) {
+  const response = await fetchWithTimeout(url, { method: 'GET', signal });
+  const text = await readBodyTextCapped(response, MAX_MANIFEST_BYTES, url);
   if (!response.ok) {
     throw new UpstreamHttpError(url, response.status, response.statusText, text.slice(0, 500));
   }
@@ -445,8 +505,8 @@ async function fetchManifestRaw(url) {
 /**
  * Fetches and parses a manifest (master OR media - determined by parser.js).
  */
-export async function getManifest(url) {
-  const { finalUrl, text } = await fetchManifestRaw(url);
+export async function getManifest(url, { signal } = {}) {
+  const { finalUrl, text } = await fetchManifestRaw(url, { signal });
 
   if (!text.trim().startsWith('#EXTM3U')) {
     throw new InvalidManifestError(url, text.split(/\r?\n/).slice(0, 10).join('\n'));
@@ -465,8 +525,8 @@ export async function getManifest(url) {
  * throws InvalidMpdError if the body doesn't parse as an MPD with at least
  * one Period.
  */
-export async function getMpd(url) {
-  const { finalUrl, text } = await fetchManifestRaw(url);
+export async function getMpd(url, { signal } = {}) {
+  const { finalUrl, text } = await fetchManifestRaw(url, { signal });
 
   const parsed = parseMpd(text, finalUrl);
   if (parsed.type !== 'dash' || !parsed.periods.length) {
@@ -480,8 +540,8 @@ export async function getMpd(url) {
  * Follows any master playlist down to a concrete media playlist (with segments).
  * Radio streams often lack the master layer entirely - in that case media is returned directly.
  */
-export async function resolveMediaPlaylist(url) {
-  const manifest = await getManifest(url);
+export async function resolveMediaPlaylist(url, { signal } = {}) {
+  const manifest = await getManifest(url, { signal });
 
   if (manifest.parsed.type === 'media') {
     return { master: null, media: manifest, chosenVariant: null };
@@ -497,7 +557,7 @@ export async function resolveMediaPlaylist(url) {
     throw new InvalidManifestError(url, 'Kunde inte hitta någon variant-URL i master-playlistan.');
   }
 
-  const media = await getManifest(chosenVariant.url);
+  const media = await getManifest(chosenVariant.url, { signal });
   if (media.parsed.type !== 'media') {
     throw new InvalidManifestError(chosenVariant.url, 'Variant-URL:en pekade inte på en media-playlist.');
   }
@@ -674,14 +734,14 @@ export function computeLatency(mediaParsed) {
  * (Content-Length / EXTINF duration = kbit/s). Individual segment failures
  * never abort the whole analysis - they're just marked as failed.
  */
-export async function measureSegmentBitrates(mediaParsed, count = 12) {
+export async function measureSegmentBitrates(mediaParsed, count = 12, { signal } = {}) {
   const segments = mediaParsed.segments || [];
   const sample = segments.slice(-count);
 
   const results = await Promise.all(
     sample.map(async (seg) => {
       try {
-        const response = await fetchWithTimeout(seg.uri, { method: 'HEAD' });
+        const response = await fetchWithTimeout(seg.uri, { method: 'HEAD', signal });
         await response.body?.cancel().catch(() => {});
         const len = Number(response.headers.get('content-length'));
         if (!response.ok || !Number.isFinite(len) || !seg.duration) {
@@ -695,7 +755,8 @@ export async function measureSegmentBitrates(mediaParsed, count = 12) {
           bitrateKbps: (len * 8) / 1000 / seg.duration,
           ok: true,
         };
-      } catch {
+      } catch (err) {
+        if (signal?.aborted) throw err; // stop the whole measurement, don't mask it as a failed segment
         return { uri: seg.uri, duration: seg.duration, bytes: null, bitrateKbps: null, ok: false };
       }
     })
@@ -713,11 +774,25 @@ export async function measureSegmentBitrates(mediaParsed, count = 12) {
 // ffprobe / ffmpeg as child processes
 // ---------------------------------------------------------------------------
 
-function runChildProcess(command, args, { timeoutMs = TIMEOUT_MS } = {}) {
+// SIGTERM on timeout/abort, then SIGKILL this long after if the process is
+// still alive (ffmpeg stuck in a network read may not act on SIGTERM promptly).
+const CHILD_SIGKILL_GRACE_MS = 3000;
+// Hard cap on captured stdout/stderr so a pathological input that makes ffprobe
+// emit a huge JSON (or ffmpeg spew to stderr) can't grow the string unbounded.
+const MAX_CHILD_OUTPUT_BYTES = 24 * 1024 * 1024;
+
+function runChildProcess(command, args, { timeoutMs = TIMEOUT_MS, signal } = {}) {
   return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(signal.reason instanceof AppError ? signal.reason : new RequestAbortedError());
+      return;
+    }
+
     let child;
     try {
-      child = spawn(command, args, { timeout: timeoutMs, windowsHide: true });
+      // No spawn `timeout` option - we manage it ourselves so we can escalate
+      // SIGTERM -> SIGKILL rather than sending a single signal that may be ignored.
+      child = spawn(command, args, { windowsHide: true });
     } catch (err) {
       reject(err);
       return;
@@ -725,22 +800,54 @@ function runChildProcess(command, args, { timeoutMs = TIMEOUT_MS } = {}) {
 
     let stdout = '';
     let stderr = '';
+    let stdoutCapped = false;
+    let stderrCapped = false;
     let timedOut = false;
+    let aborted = false;
+    let sigkillTimer = null;
+
+    const escalateKill = () => {
+      child.kill('SIGTERM');
+      if (!sigkillTimer) {
+        sigkillTimer = setTimeout(() => child.kill('SIGKILL'), CHILD_SIGKILL_GRACE_MS);
+        sigkillTimer.unref?.();
+      }
+    };
+
+    const deadline = setTimeout(() => { timedOut = true; escalateKill(); }, timeoutMs);
+    deadline.unref?.();
+
+    const onAbort = () => { aborted = true; escalateKill(); };
+    signal?.addEventListener('abort', onAbort, { once: true });
+
+    const cleanup = () => {
+      clearTimeout(deadline);
+      if (sigkillTimer) clearTimeout(sigkillTimer);
+      signal?.removeEventListener('abort', onAbort);
+    };
 
     child.on('error', (err) => {
-      if (err.code === 'ENOENT') {
-        reject(new BinaryMissingError(command));
-      } else {
-        reject(err);
-      }
+      cleanup();
+      reject(err.code === 'ENOENT' ? new BinaryMissingError(command) : err);
     });
 
-    child.stdout?.on('data', (chunk) => { stdout += chunk; });
-    child.stderr?.on('data', (chunk) => { stderr += chunk; });
+    child.stdout?.on('data', (chunk) => {
+      if (stdout.length + chunk.length <= MAX_CHILD_OUTPUT_BYTES) stdout += chunk;
+      else stdoutCapped = true;
+    });
+    child.stderr?.on('data', (chunk) => {
+      if (stderr.length + chunk.length <= MAX_CHILD_OUTPUT_BYTES) stderr += chunk;
+      else stderrCapped = true;
+    });
 
-    child.on('close', (code, signal) => {
-      if (signal === 'SIGTERM' && code === null) timedOut = true;
-      resolve({ code, signal, stdout, stderr, timedOut });
+    child.on('close', (code, sig) => {
+      cleanup();
+      if (aborted && signal?.aborted) {
+        reject(signal.reason instanceof AppError ? signal.reason : new RequestAbortedError());
+        return;
+      }
+      if ((sig === 'SIGTERM' || sig === 'SIGKILL') && code === null) timedOut = true;
+      resolve({ code, signal: sig, stdout, stderr, timedOut, stdoutCapped, stderrCapped });
     });
   });
 }
@@ -767,19 +874,23 @@ function simplifyProbeResult(probeJson) {
  * Runs ffprobe against a URL (master or media - ffmpeg's HLS demuxer handles both)
  * and returns both the raw data and a simplified summary of the audio track.
  */
-export async function runFfprobe(url) {
+export async function runFfprobe(url, { signal } = {}) {
+  signal?.throwIfAborted?.();
   await assertPublicHost(url);
 
   const args = [
     '-v', 'quiet',
     '-user_agent', USER_AGENT,
+    // Give up on a stalled network read instead of letting ffprobe sit there
+    // downloading/waiting until it's force-killed (in microseconds).
+    '-rw_timeout', String(TIMEOUT_MS * 1000),
     '-print_format', 'json',
     '-show_format',
     '-show_streams',
     url,
   ];
 
-  const { code, stdout, stderr, timedOut } = await runChildProcess('ffprobe', args);
+  const { code, stdout, stderr, timedOut } = await runChildProcess('ffprobe', args, { signal });
 
   if (timedOut) throw new TimeoutError(url);
   if (code !== 0) throw new FfprobeError(stderr);
@@ -804,7 +915,10 @@ export async function runFfprobe(url) {
  * capture is capped at 15s, so one call can't be steered into pulling a large
  * video rendition down through the server.
  */
-export async function sampleStream(url, requestedSeconds = 8) {
+export const MAX_SAMPLE_FILE_BYTES = 50 * 1024 * 1024;
+
+export async function sampleStream(url, requestedSeconds = 8, { signal } = {}) {
+  signal?.throwIfAborted?.();
   await assertPublicHost(url);
 
   const secs = Math.min(15, Math.max(1, Number(requestedSeconds) || 8));
@@ -813,8 +927,10 @@ export async function sampleStream(url, requestedSeconds = 8) {
   const ffmpegArgs = [
     '-y',
     '-user_agent', USER_AGENT,
+    '-rw_timeout', String(TIMEOUT_MS * 1000), // µs; bail on a read that stalls >10s
     '-i', url,
     '-t', String(secs),
+    '-fs', String(MAX_SAMPLE_FILE_BYTES), // hard cap the temp file regardless of claimed bitrate
     '-map', '0:a',
     '-map', '0:d?',
     '-c', 'copy',
@@ -823,7 +939,7 @@ export async function sampleStream(url, requestedSeconds = 8) {
   ];
 
   try {
-    const rec = await runChildProcess('ffmpeg', ffmpegArgs, { timeoutMs: secs * 1000 + TIMEOUT_MS });
+    const rec = await runChildProcess('ffmpeg', ffmpegArgs, { timeoutMs: secs * 1000 + TIMEOUT_MS, signal });
     if (rec.timedOut) throw new TimeoutError(url);
 
     let stat;
@@ -848,8 +964,8 @@ export async function sampleStream(url, requestedSeconds = 8) {
     ];
 
     const [probeRes, framesRes] = await Promise.all([
-      runChildProcess('ffprobe', probeArgs),
-      runChildProcess('ffprobe', framesArgs),
+      runChildProcess('ffprobe', probeArgs, { signal }),
+      runChildProcess('ffprobe', framesArgs, { signal }),
     ]);
 
     let probeJson = {};
@@ -902,18 +1018,18 @@ export async function checkBinaryAvailable(binary) {
 // renamed; DASH is analyzeDash() below.
 // ---------------------------------------------------------------------------
 
-export async function analyze(url) {
-  const kind = await sniffStreamKind(url);
-  if (kind.kind === 'dash') return analyzeDash(url);
-  return analyzeHls(url);
+export async function analyze(url, { signal } = {}) {
+  const kind = await sniffStreamKind(url, { signal });
+  if (kind.kind === 'dash') return analyzeDash(url, { signal });
+  return analyzeHls(url, { signal });
 }
 
-export async function analyzeHls(url) {
+export async function analyzeHls(url, { signal } = {}) {
   const errors = {};
 
-  const connection = await fetchHeaders(url);
+  const connection = await fetchHeaders(url, { signal });
 
-  const { master, media, chosenVariant } = await resolveMediaPlaylist(url);
+  const { master, media, chosenVariant } = await resolveMediaPlaylist(url, { signal });
 
   const segments = computeSegmentStats(media.parsed);
   const latency = computeLatency(media.parsed);
@@ -922,17 +1038,19 @@ export async function analyzeHls(url) {
 
   let bitrate = { samples: [], averageMeasuredBitrateKbps: null };
   try {
-    bitrate = await measureSegmentBitrates(media.parsed);
+    bitrate = await measureSegmentBitrates(media.parsed, 12, { signal });
   } catch (err) {
+    if (signal?.aborted) throw err;
     errors.bitrate = { message: err.message, code: err.code || 'UNKNOWN' };
   }
   bitrate.declaredBandwidthKbps = chosenVariant?.bandwidth ? chosenVariant.bandwidth / 1000 : null;
 
   let audio = null;
   try {
-    const probe = await runFfprobe(media.finalUrl);
+    const probe = await runFfprobe(media.finalUrl, { signal });
     audio = probe.audio;
   } catch (err) {
+    if (signal?.aborted) throw err;
     errors.ffprobe = { message: err.message, code: err.code || 'UNKNOWN', details: err.details };
   }
 
@@ -1320,12 +1438,12 @@ function buildDashRepresentationList(parsedMpd, chosen) {
  * own isolated try/catch so one failure degrades to a warning, same as
  * analyzeHls().
  */
-export async function analyzeDash(url) {
+export async function analyzeDash(url, { signal } = {}) {
   const errors = {};
 
-  const connection = await fetchHeaders(url);
+  const connection = await fetchHeaders(url, { signal });
 
-  const mpd = await getMpd(url); // fatal on an invalid MPD, like getManifest() for HLS
+  const mpd = await getMpd(url, { signal }); // fatal on an invalid MPD, like getManifest() for HLS
 
   const chosen = chooseDashAudioRepresentation(mpd.parsed);
   if (!chosen) {
@@ -1341,17 +1459,19 @@ export async function analyzeDash(url) {
 
   let bitrate = { samples: [], averageMeasuredBitrateKbps: null };
   try {
-    bitrate = await measureSegmentBitrates(generated);
+    bitrate = await measureSegmentBitrates(generated, 12, { signal });
   } catch (err) {
+    if (signal?.aborted) throw err;
     errors.bitrate = { message: err.message, code: err.code || 'UNKNOWN' };
   }
   bitrate.declaredBandwidthKbps = chosen.representation.bandwidth ? chosen.representation.bandwidth / 1000 : null;
 
   let audio = null;
   try {
-    const probe = await runFfprobe(mpd.finalUrl);
+    const probe = await runFfprobe(mpd.finalUrl, { signal });
     audio = probe.audio;
   } catch (err) {
+    if (signal?.aborted) throw err;
     errors.ffprobe = { message: err.message, code: err.code || 'UNKNOWN', details: err.details };
   }
 

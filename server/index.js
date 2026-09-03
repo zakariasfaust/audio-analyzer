@@ -8,6 +8,7 @@ import express from 'express';
 import rateLimit from 'express-rate-limit';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { setMaxListeners } from 'node:events';
 
 import {
   AppError,
@@ -27,6 +28,12 @@ const RATE_LIMIT_MAX = 60; // per IP, per window - roomy for interactive use (a 
 // limit does nothing against many IPs; this is what actually bounds CPU, memory,
 // disk and bandwidth on the host no matter how the requests arrive.
 const MAX_CONCURRENT_JOBS = 3;
+// Absolute wall-clock ceiling per job. Every internal step already has its own
+// 10s timeout and a fully-degraded analyze (every step timing out in sequence)
+// still lands under this; it only catches a request that wedges anyway - and,
+// crucially, it aborts the work (in-flight fetches + ffmpeg/ffprobe) rather than
+// letting it keep consuming memory/bandwidth after we've stopped waiting.
+const REQUEST_DEADLINE_MS = 90_000;
 
 const app = express();
 // When deployed, a reverse proxy sits in front; trust exactly one hop so the
@@ -79,9 +86,12 @@ const STATUS_BY_CODE = {
   VALIDATION_ERROR: 400,
   HOST_BLOCKED: 400,
   TIMEOUT: 504,
+  REQUEST_TIMEOUT: 504,
+  REQUEST_ABORTED: 499, // client went away; response is never actually sent
   UPSTREAM_HTTP_ERROR: 502,
   INVALID_MANIFEST: 502,
   INVALID_MPD: 502,
+  MANIFEST_TOO_LARGE: 502,
   BINARY_MISSING: 500,
   FFPROBE_FAILED: 500,
   FFMPEG_FAILED: 500,
@@ -101,27 +111,58 @@ function sendError(res, err) {
   });
 }
 
+// Wraps a route handler with a per-request AbortController:
+//  - abort if the client disconnects before we've responded
+//  - abort after REQUEST_DEADLINE_MS as a hard ceiling
+// The handler gets (req, res, signal) and must thread `signal` into analyze() /
+// sampleStream() so in-flight fetches and child processes are actually killed -
+// otherwise "we stopped waiting" doesn't mean "the work stopped".
+function withRequestAbort(handler) {
+  return async (req, res) => {
+    const controller = new AbortController();
+    // One analysis makes ~15 fetches, each briefly composing this signal via
+    // AbortSignal.any(); raise the ceiling so that never logs a warning.
+    setMaxListeners(50, controller.signal);
+    const deadline = setTimeout(() => {
+      controller.abort(new AppError('REQUEST_TIMEOUT', `Analysen översteg ${REQUEST_DEADLINE_MS / 1000} s och avbröts.`));
+    }, REQUEST_DEADLINE_MS);
+    const onClose = () => {
+      if (!res.writableFinished) controller.abort(new AppError('REQUEST_ABORTED', 'Klienten avbröt anslutningen.'));
+    };
+    res.once('close', onClose);
+    try {
+      await handler(req, res, controller.signal);
+    } catch (err) {
+      if (res.headersSent || res.destroyed) return;
+      sendError(res, controller.signal.aborted && controller.signal.reason instanceof AppError ? controller.signal.reason : err);
+    } finally {
+      clearTimeout(deadline);
+      res.off('close', onClose);
+    }
+  };
+}
+
 // -----------------------------------------------------------------------
 // API routes
 // -----------------------------------------------------------------------
 
-app.post('/api/analyze', jobGuard, async (req, res) => {
-  try {
+app.post(
+  '/api/analyze',
+  jobGuard,
+  withRequestAbort(async (req, res, signal) => {
     const url = validateUrl(req.body?.url ?? req.query.url);
-    res.json(await analyze(url));
-  } catch (err) {
-    sendError(res, err);
-  }
-});
+    res.json(await analyze(url, { signal }));
+  })
+);
 
-app.get('/api/sample', jobGuard, async (req, res) => {
-  try {
+app.get(
+  '/api/sample',
+  jobGuard,
+  withRequestAbort(async (req, res, signal) => {
     const url = validateUrl(req.query.url);
-    res.json(await sampleStream(url, req.query.secs));
-  } catch (err) {
-    sendError(res, err);
-  }
-});
+    res.json(await sampleStream(url, req.query.secs, { signal }));
+  })
+);
 
 app.use('/api', (req, res) => {
   res.status(404).json({ error: { code: 'NOT_FOUND', message: `Okänd API-route: ${req.path}` } });
