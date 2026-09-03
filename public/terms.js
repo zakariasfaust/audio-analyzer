@@ -45,7 +45,7 @@ const STREAM_TERMS = {
   'ip-geo':
     'Stad/land för varje IP, från en lokal offline-databas. Ett grovt komplement till hintan ovan - kan vara fel eller inaktuellt, särskilt för CDN-adresser.',
   'extra-headers':
-    'Alla HTTP-headrar i svaret vars namn börjar med "x-" (en gammal konvention för icke-standardiserade headrar) eller innehåller "akamai". Ofta de mest talande för vad som hänt hos CDN:et, t.ex. om svaret kom från cache eller vilken server som svarade.',
+    'HTTP-headrar i svaret vars namn börjar med "x-" (en gammal konvention för icke-standardiserade headrar), innehåller "akamai", eller börjar med "icy-" (stationsinfo från Icecast/SHOUTcast/RSAS). Ofta de mest talande för vad som hänt hos CDN:et eller strömservern.',
 
   // Variants (th)
   'variant-bandbredd':
@@ -158,4 +158,26 @@ const STREAM_TERMS = {
     'DRM/kryptering deklarerad i manifestet, visad som schemeIdUri (t.ex. Widevine, PlayReady, ClearKey). Verktyget visar bara att skyddet finns - det kan inte dekryptera, så ljudanalysen kan misslyckas för skyddade strömmar.',
   'init-segment':
     'Ett separat initieringssegment (fMP4) som innehåller spårets uppsättningsdata och måste hämtas före de vanliga mediesegmenten. Anges av initialization-attributet i MPD:n.',
+
+  // --- Icecast / SHOUTcast / RSAS ---
+  icecast:
+    'Icecast, SHOUTcast och RSAS (Rocket Streaming Audio Server) är samma sorts strömserver: en enda oändlig ljudanslutning utan manifest eller segment. De delar protokoll - stationsinfo skickas i icy-*-headrar och låttiteln i ett litet metadatablock invävt i ljudflödet.',
+  'station-name': 'Stationens namn enligt icy-name-headern servern skickar. Sätts av den som konfigurerar strömmen.',
+  'station-genre': 'Genren stationen anger om sig själv i icy-genre-headern. Fritext, ingen fast lista.',
+  'station-description': 'Stationens egen beskrivning ur icy-description (Icecast). SHOUTcast skickar sällan den.',
+  'station-homepage': 'Länken stationen anger till sin webbplats i icy-url-headern.',
+  'now-playing-icy':
+    'Titeln på det som spelas just nu, läst ur StreamTitle i ett metadatablock som servern väver in i ljudflödet med jämna mellanrum. Verktyget läser de första sekunderna och plockar ut första blocket - en del stationer har metadata avstängt.',
+  'server-software':
+    'Vilken strömserver som svarade, ur Server-headern - t.ex. "Icecast 2.4.4" eller "RocketStreamingAudioServer/1.x". SHOUTcast och RSAS talar samma icy-protokoll som Icecast.',
+  'icy-public':
+    'Om stationen bett om att listas i publika kataloger (YP-directories), enligt icy-pub. Påverkar inte om du kan lyssna, bara om den syns i kataloger.',
+  'icy-metaint':
+    'Antal bytes ljud mellan varje inbäddat metadatablock (icy-metaint). Skickas bara när klienten ber om metadata. Saknas det helt skickar strömmen ingen låttitel - vanligt och inget fel.',
+  'declared-bitrate-icy': 'Bitraten servern uppger i icy-br-headern, i kbit/s. Jämför med den uppmätta bitraten i Ljudprov nedan.',
+  'declared-samplerate-icy': 'Samplingsfrekvensen servern uppger i icy-sr-headern, i Hz. Alla servrar skickar inte den.',
+  'icecast-sample':
+    'Verktyget spelar in några sekunder av strömmen och mäter den faktiska datamängden per sekund. Letar även efter ID3-ramar - ovanligt för Icecast, där låttiteln normalt kommer via icy-metadata istället.',
+  'inspelad-langd':
+    'Hur många sekunder som faktiskt spelades in för mätningen - kan bli kortare än begärt om strömmen hackade eller anslutningen bröts.',
 };

@@ -87,7 +87,7 @@ function renderConnection(c) {
     ? `<table><thead><tr><th>Header</th><th>Värde</th></tr></thead><tbody>${extra
         .map(([k, v]) => `<tr><td>${esc(k)}</td><td>${esc(v)}</td></tr>`)
         .join('')}</tbody></table>`
-    : '<p class="note">Inga x- eller akamai-headers.</p>';
+    : '<p class="note">Inga x-, akamai- eller icy-headers.</p>';
 
   return `
     <section id="sec-connection">
@@ -102,7 +102,7 @@ function renderConnection(c) {
         ${withHint('dt', 'Expires', 'expires')}<dd>${esc(c.expires) || '–'}</dd>
         ${withHint('dt', 'CORS', 'cors')}${corsLine}
       </dl>
-      ${withHint('h3', 'x- / akamai-headers', 'extra-headers')}
+      ${withHint('h3', 'x- / akamai- / icy-headers', 'extra-headers')}
       ${extraHtml}
     </section>`;
 }
@@ -522,6 +522,82 @@ function renderDashLatency(l) {
     </section>`;
 }
 
+// ---------------------------------------------------------------------
+// Icecast / SHOUTcast / RSAS sections. The smallest of the three shapes -
+// a raw stream has no variant/segment/latency model. renderConnection,
+// renderNetworkPath, renderAudio, renderWarnings and renderFatalError are
+// reused unchanged; "now playing" comes from ICY in-stream metadata rather
+// than ID3, so it gets its own section instead of renderId3.
+// ---------------------------------------------------------------------
+
+function renderIcecastStation(st) {
+  if (!st) {
+    return `
+      <section id="sec-station">
+        ${withHint('h2', 'Station', 'icecast')}
+        <p class="note">Ingen stationsmetadata kunde hämtas (se varningar ovan).</p>
+      </section>`;
+  }
+
+  const nowPlaying = st.icyMetadataSupported
+    ? st.nowPlaying
+      ? esc(st.nowPlaying)
+      : `<span class="note">Metadata är påslaget (var ${fmtInt(st.metaIntBytes)} byte) men inget titelblock hann skickas innan provet var klart.</span>`
+    : '<span class="note">Strömmen skickar ingen låttitel i ljudflödet (icy-metaint saknas). Vanligt - inte ett fel.</span>';
+
+  const homepage = st.homepageUrl
+    ? `<a href="${esc(st.homepageUrl)}" target="_blank" rel="noopener">${esc(st.homepageUrl)}</a>`
+    : '–';
+
+  return `
+    <section id="sec-station">
+      ${withHint('h2', 'Station', 'icecast')}
+      <dl>
+        ${withHint('dt', 'Namn', 'station-name')}<dd>${esc(st.name) || '–'}</dd>
+        ${withHint('dt', 'Nu spelas', 'now-playing-icy')}<dd>${nowPlaying}</dd>
+        ${withHint('dt', 'Genre', 'station-genre')}<dd>${esc(st.genre) || '–'}</dd>
+        ${withHint('dt', 'Beskrivning', 'station-description')}<dd>${esc(st.description) || '–'}</dd>
+        ${withHint('dt', 'Hemsida', 'station-homepage')}<dd>${homepage}</dd>
+        ${withHint('dt', 'Deklarerad bitrate', 'declared-bitrate-icy')}<dd>${st.declaredBitrateKbps ? fmtInt(st.declaredBitrateKbps) + ' kbit/s' : '–'}</dd>
+        ${withHint('dt', 'Deklarerad samplingsfrekvens', 'declared-samplerate-icy')}<dd>${st.declaredSampleRateHz ? fmtInt(st.declaredSampleRateHz) + ' Hz' : '–'}</dd>
+        ${st.audioInfo ? `${withHint('dt', 'ice-audio-info', 'declared-samplerate-icy')}<dd>${esc(st.audioInfo)}</dd>` : ''}
+        ${withHint('dt', 'Serverprogramvara', 'server-software')}<dd>${esc(st.serverSoftware) || '–'}</dd>
+        ${withHint('dt', 'Publikt listad', 'icy-public')}<dd>${st.isPublic ? 'Ja (icy-pub: 1)' : 'Nej'}</dd>
+        ${withHint('dt', 'In-stream-metadata', 'icy-metaint')}<dd>${st.icyMetadataSupported ? `Ja, var ${fmtInt(st.metaIntBytes)} byte` : 'Nej'}</dd>
+      </dl>
+      ${st.rawMetaBlock ? `<p class="note">Rått metadatablock:</p><pre>${esc(st.rawMetaBlock)}</pre>` : ''}
+    </section>`;
+}
+
+function renderIcecastSamplePlaceholder() {
+  return `<section id="sec-icecast-sample">${withHint('h2', 'Ljudprov', 'icecast-sample')}<p class="note">Spelar in…</p></section>`;
+}
+
+function renderIcecastSample(sample, error) {
+  const head = withHint('h2', 'Ljudprov', 'icecast-sample');
+  if (error) return `${head}<p class="error">${esc(error.message)}</p>`;
+  if (!sample) return `${head}<p class="note">Hämtades inte (analysen avbröts eller väntar fortfarande).</p>`;
+
+  const s = sample.streams || {};
+  const id3Block = sample.id3 && sample.id3.available
+    ? `<p class="note">ID3-ramar i flödet (ovanligt för Icecast):</p>
+       <table><thead><tr>${withHint('th', 'Tid i prov', 'tid-i-segment')}${withHint('th', 'Taggar', 'taggar')}</tr></thead>
+       <tbody>${sample.id3.frames
+         .map((f) => `<tr><td>${fmtDuration(f.ptsTime)}</td><td>${esc(JSON.stringify(f.tags))}</td></tr>`)
+         .join('')}</tbody></table>`
+    : '';
+
+  return `
+    ${head}
+    <dl>
+      ${withHint('dt', 'Uppmätt bitrate', 'snitt-uppmatt')}<dd>${sample.measuredBitrateKbps ? fmtNumber(sample.measuredBitrateKbps) + ' kbit/s' : '–'}</dd>
+      ${withHint('dt', 'Inspelad längd', 'inspelad-langd')}<dd>${fmtDuration(sample.actualDurationSec)}</dd>
+      ${withHint('dt', 'Provets storlek', 'bytes')}<dd>${sample.fileSizeBytes ? fmtInt(sample.fileSizeBytes) + ' byte' : '–'}</dd>
+      ${withHint('dt', 'Container', 'container')}<dd>${esc(s.container) || '–'}</dd>
+    </dl>
+    ${id3Block}`;
+}
+
 function renderWarnings(errors) {
   const entries = Object.entries(errors || {});
   if (!entries.length) return '';
@@ -564,6 +640,7 @@ function renderFatalError(err) {
 
 function buildCopyText(data, sample, sampleError, variantsOverride) {
   if (data.streamKind === 'dash') return buildDashCopyText(data, sample, sampleError);
+  if (data.streamKind === 'icecast') return buildIcecastCopyText(data, sample, sampleError);
 
   const lines = [];
   const add = (line = '') => lines.push(line);
@@ -587,7 +664,7 @@ function buildCopyText(data, sample, sampleError, variantsOverride) {
   add(`CORS: ${c.cors.present ? `Ja (${c.cors.allowOrigin})` : 'Nej - saknas'}`);
   const extraHeaders = Object.entries(c.extraHeaders || {});
   if (extraHeaders.length) {
-    add('x-/akamai-headers:');
+    add('x-/akamai-/icy-headers:');
     extraHeaders.forEach(([k, v]) => add(`  ${k}: ${v}`));
   }
   add('');
@@ -769,7 +846,7 @@ function buildDashCopyText(data, sample, sampleError) {
   add(`CORS: ${c.cors.present ? `Ja (${c.cors.allowOrigin})` : 'Nej - saknas'}`);
   const extraHeaders = Object.entries(c.extraHeaders || {});
   if (extraHeaders.length) {
-    add('x-/akamai-headers:');
+    add('x-/akamai-/icy-headers:');
     extraHeaders.forEach(([k, v]) => add(`  ${k}: ${v}`));
   }
   add('');
@@ -895,6 +972,101 @@ function buildDashCopyText(data, sample, sampleError) {
   return lines.join('\n');
 }
 
+// Parallel Icecast/RSAS branch of buildCopyText - the sections the Icecast
+// render chain shows, as plain text.
+function buildIcecastCopyText(data, sample, sampleError) {
+  const lines = [];
+  const add = (line = '') => lines.push(line);
+
+  add(`Strömanalys (Icecast/radio): ${data.requestedUrl}`);
+  add(`Genererad: ${fmtDateTime(new Date().toISOString())}`);
+  add('');
+
+  const c = data.connection;
+  add('ANSLUTNING');
+  add(`Status: ${c.status} ${c.statusText}`);
+  add(`Begärd URL: ${c.requestedUrl}`);
+  add(`Slutlig URL: ${c.finalUrl}${c.redirected ? ' (omdirigerad)' : ''}`);
+  add(`Content-Type: ${c.contentType || '–'}`);
+  add(`Server: ${c.server || '–'}`);
+  add(`CORS: ${c.cors.present ? `Ja (${c.cors.allowOrigin})` : 'Nej - saknas'}`);
+  const extraHeaders = Object.entries(c.extraHeaders || {});
+  if (extraHeaders.length) {
+    add('x-/akamai-/icy-headers:');
+    extraHeaders.forEach(([k, v]) => add(`  ${k}: ${v}`));
+  }
+  add('');
+
+  const st = data.station || {};
+  add('STATION');
+  add(`Namn: ${st.name || '–'}`);
+  add(
+    `Nu spelas: ${
+      st.nowPlaying || (st.icyMetadataSupported ? '(inget titelblock hann skickas)' : '(strömmen skickar ingen låttitel)')
+    }`
+  );
+  add(`Genre: ${st.genre || '–'}`);
+  add(`Beskrivning: ${st.description || '–'}`);
+  add(`Hemsida: ${st.homepageUrl || '–'}`);
+  add(`Deklarerad bitrate: ${st.declaredBitrateKbps ? fmtInt(st.declaredBitrateKbps) + ' kbit/s' : '–'}`);
+  add(`Deklarerad samplingsfrekvens: ${st.declaredSampleRateHz ? fmtInt(st.declaredSampleRateHz) + ' Hz' : '–'}`);
+  if (st.audioInfo) add(`ice-audio-info: ${st.audioInfo}`);
+  add(`Serverprogramvara: ${st.serverSoftware || '–'}`);
+  add(`Publikt listad: ${st.isPublic ? 'Ja' : 'Nej'}`);
+  add(`In-stream-metadata: ${st.icyMetadataSupported ? `Ja (var ${fmtInt(st.metaIntBytes)} byte)` : 'Nej'}`);
+  if (st.rawMetaBlock) add(`Rått metadatablock: ${st.rawMetaBlock}`);
+  add('');
+
+  const a = data.audio;
+  add('LJUDSPÅRET');
+  if (a) {
+    add(`Codec: ${a.codec || '–'}${a.profile ? ' (' + a.profile + ')' : ''}`);
+    add(`Samplingsfrekvens: ${a.sampleRate ? fmtInt(a.sampleRate) + ' Hz' : '–'}`);
+    add(`Kanaler: ${a.channels ?? '–'}${a.channelLayout ? ' (' + a.channelLayout + ')' : ''}`);
+    add(`Bitrate: ${a.bitRate ? fmtNumber(a.bitRate / 1000) + ' kbit/s' : 'okänd'}`);
+    add(`Container: ${a.container || '–'}`);
+  } else {
+    add('Kunde inte hämtas (se varningar).');
+  }
+  add('');
+
+  const np = data.networkPath;
+  add('NÄTVERKSVÄG');
+  const npHeaders = Object.entries(np.headers || {});
+  if (npHeaders.length) npHeaders.forEach(([k, v]) => add(`  ${k}: ${v}`));
+  else add('Inga matchande routing-headrar hittades.');
+  const dnsInfo = np.dns || {};
+  add(
+    `DNS-uppslagning (${dnsInfo.hostname || '–'}): ${
+      dnsInfo.error ? `kunde inte slås upp (${dnsInfo.error})` : dnsInfo.addresses?.join(', ') || 'inga adresser'
+    }`
+  );
+  add('');
+
+  add('LJUDPROV');
+  if (sampleError) {
+    add(`Kunde inte hämtas: ${sampleError.message}`);
+  } else if (sample) {
+    add(`Uppmätt bitrate: ${sample.measuredBitrateKbps ? fmtNumber(sample.measuredBitrateKbps) + ' kbit/s' : '–'}`);
+    add(`Inspelad längd: ${fmtDuration(sample.actualDurationSec)}`);
+    add(`Provets storlek: ${sample.fileSizeBytes ? fmtInt(sample.fileSizeBytes) + ' byte' : '–'}`);
+    if (sample.id3 && sample.id3.available) {
+      sample.id3.frames.forEach((f) => add(`  ID3 ${fmtDuration(f.ptsTime)}: ${JSON.stringify(f.tags)}`));
+    }
+  } else {
+    add('Hämtades inte (analysen avbröts eller väntar fortfarande).');
+  }
+
+  const errorEntries = Object.entries(data.errors || {});
+  if (errorEntries.length) {
+    add('');
+    add('VARNINGAR (delvis resultat)');
+    errorEntries.forEach(([key, e]) => add(`- ${key}: ${e.message}`));
+  }
+
+  return lines.join('\n');
+}
+
 // ---------------------------------------------------------------------
 // Main flow: the Analyze button runs /api/analyze and then /api/sample
 // in sequence, and renders everything into #results. Clicking a variant row (see
@@ -964,6 +1136,14 @@ async function runAnalysis(targetUrl, { isVariantSwitch = false } = {}) {
       renderBitrate(data.bitrate) +
       renderId3Placeholder() +
       renderDashManifest(data.manifests);
+  } else if (data.streamKind === 'icecast') {
+    resultsEl.innerHTML =
+      renderWarnings(data.errors) +
+      renderConnection(data.connection) +
+      renderNetworkPath(data.networkPath) +
+      renderIcecastStation(data.station) +
+      renderAudio(data.audio) +
+      renderIcecastSamplePlaceholder();
   } else {
     if (!isVariantSwitch) {
       baseVariantsInfo = data.variants;
@@ -984,23 +1164,26 @@ async function runAnalysis(targetUrl, { isVariantSwitch = false } = {}) {
   lastAnalyzeData = data;
   copyBtn.disabled = false;
 
-  statusEl.textContent = 'Hämtar nu spelas…';
-  const id3Section = document.getElementById('sec-id3');
+  const isIcecast = data.streamKind === 'icecast';
+  statusEl.textContent = isIcecast ? 'Spelar in ljudprov…' : 'Hämtar nu spelas…';
+  const sampleSection = document.getElementById(isIcecast ? 'sec-icecast-sample' : 'sec-id3');
+  const renderSample = (body, error) =>
+    isIcecast ? renderIcecastSample(body, error) : renderId3(body, error);
   try {
     const sampleTarget = data.sampleUrl || data.variants?.chosenVariantUrl;
     const sampleUrl = '/api/sample?url=' + encodeURIComponent(sampleTarget) + '&secs=8';
     const res = await fetch(sampleUrl);
     const body = await res.json();
     if (res.ok) {
-      id3Section.innerHTML = renderId3(body, null);
+      sampleSection.innerHTML = renderSample(body, null);
       lastSampleData = body;
     } else {
-      id3Section.innerHTML = renderId3(null, body.error);
+      sampleSection.innerHTML = renderSample(null, body.error);
       lastSampleError = body.error;
     }
   } catch (err) {
     const fetchError = { message: 'Kunde inte nå servern: ' + err.message };
-    id3Section.innerHTML = renderId3(null, fetchError);
+    sampleSection.innerHTML = renderSample(null, fetchError);
     lastSampleError = fetchError;
   }
 

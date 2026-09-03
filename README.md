@@ -1,13 +1,14 @@
 # Audio Analyzer
 
-A small tool for analyzing audio streams (HLS/`.m3u8` and MPEG-DASH/`.mpd`) -
-designed especially for radio streams behind CDNs like Akamai.
-Paste in a manifest URL and get a combined status snapshot: connection/CORS,
-variants (HLS) or representations (DASH), audio codec, segments and buffer,
-latency, measured bitrate, "now playing" ID3, and the raw manifest.
+A small tool for analyzing audio streams - HLS (`.m3u8`), MPEG-DASH (`.mpd`)
+and Icecast/SHOUTcast/RSAS - designed especially for radio streams behind CDNs
+like Akamai. Paste in a stream URL and get a combined status snapshot:
+connection/CORS, variants (HLS) / representations (DASH) / station metadata
+(Icecast), audio codec, segments and buffer, latency, measured bitrate,
+"now playing", and the raw manifest.
 
-The stream type is detected automatically from the response (Content-Type,
-then a small body peek), so the same URL field takes either format.
+The stream type is detected automatically from the response (Content-Type and
+`icy-*` headers, then a small body peek), so the same URL field takes any of them.
 
 ## Why a backend?
 
@@ -44,8 +45,9 @@ in a `.m3u8` URL, and click Analyze.
 ## Testing
 
 There are no automated tests. Manual verification:
-1. `npm start`, open the page, analyze a known HLS `.m3u8` URL and a known
-   DASH `.mpd` URL - both should render the full set of section cards.
+1. `npm start`, open the page, analyze a known HLS `.m3u8` URL, a known
+   DASH `.mpd` URL, and a public Icecast/radio stream URL - each should render
+   its own set of section cards.
 2. Test a failure case by pasting in a URL that returns 404 or points to
    a page that is neither an M3U8 nor an MPD - the error should display readably,
    the page should never go blank.
@@ -61,6 +63,13 @@ There are no automated tests. Manual verification:
   Periods are out of scope, and DRM-protected streams show the protection
   scheme but the audio section then fails predictably (ffprobe can't decrypt).
   Segment counts for live DASH are estimated from the manifest, not listed.
+- **Icecast / SHOUTcast / RSAS** streams are detected from the `icy-*` response
+  headers (or a bare `audio/*` content-type) and analysed for what a raw stream
+  actually exposes: station name/genre/description, declared vs. measured
+  bitrate, server software, and "now playing" from the in-stream ICY metadata
+  block. RSAS is Icecast-compatible and needs nothing extra; RSAS's own HLS
+  endpoints go through the HLS path. Legacy SHOUTcast v1 servers that answer
+  with a non-HTTP `ICY 200 OK` status line are not supported (v2/DNAS is).
 - **"Only one variant"** - many radio streams lack a separate
   master playlist; the URL then points directly at the media playlist. This is flagged
   in the UI instead of showing an empty variant table.

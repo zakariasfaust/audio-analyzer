@@ -281,7 +281,9 @@ export async function fetchHeaders(url, { signal } = {}) {
   const headers = headersToObject(response.headers);
   const extraHeaders = {};
   for (const [key, value] of Object.entries(headers)) {
-    if (key.startsWith('x-') || key.startsWith('akamai')) {
+    // icy-* (Icecast/SHOUTcast/RSAS station info) and Icecast's ice-audio-info
+    // ride along on the same card - no extra UI, just a wider filter.
+    if (key.startsWith('x-') || key.startsWith('akamai') || key.startsWith('icy-') || key === 'ice-audio-info') {
       extraHeaders[key] = value;
     }
   }
@@ -347,7 +349,11 @@ async function readBodyPrefix(response, maxBytes) {
 /**
  * One GET, then decide what kind of stream the URL is:
  *  - Level 1: Content-Type alone (dash+xml / mpegurl) - body cancelled immediately.
- *  - Level 2: unclear Content-Type - peek at up to ~4 KB and look for #EXTM3U or <MPD.
+ *  - Icecast/SHOUTcast/RSAS: an icy-* response header (strongest signal) or a
+ *    bare audio/* content-type - body cancelled, it's an endless audio stream.
+ *  - Level 2: unclear Content-Type - peek at up to ~4 KB and look for #EXTM3U or
+ *    <MPD; a body that is raw bytes (NUL / invalid UTF-8) and matched no marker
+ *    is treated as icecast (a mount with neither icy headers nor an audio type).
  *  - Neither: 'unknown' (the caller falls back to the HLS path, which fails
  *    with a readable INVALID_MANIFEST if it really isn't HLS).
  *
@@ -370,6 +376,20 @@ export async function sniffStreamKind(url, { signal } = {}) {
     return { kind: isDashType ? 'dash' : 'hls', contentType, finalUrl, matchedOn: 'content-type' };
   }
 
+  const hasIcyHeader = Object.keys(headers).some((k) => k.startsWith('icy-'));
+  // audio/* covers a mount with no icy metadata and plain progressive HTTP
+  // audio; application/ogg is how Icecast labels Ogg/Opus/Vorbis mounts.
+  const isRawAudioType = /^(?:audio\/|application\/ogg\b)/.test(contentType);
+  if (hasIcyHeader || isRawAudioType) {
+    await response.body?.cancel().catch(() => {});
+    return {
+      kind: 'icecast',
+      contentType,
+      finalUrl,
+      matchedOn: hasIcyHeader ? 'icy-header' : 'content-type',
+    };
+  }
+
   const peek = await readBodyPrefix(response, 4096);
   const trimmed = peek.replace(/^\uFEFF/, '').trimStart(); // strip a leading BOM
   if (trimmed.startsWith('#EXTM3U')) {
@@ -377,6 +397,12 @@ export async function sniffStreamKind(url, { signal } = {}) {
   }
   if (/<(?:[\w-]+:)?MPD[\s/>]/.test(peek)) {
     return { kind: 'dash', contentType, finalUrl, matchedOn: 'body' };
+  }
+  // NUL bytes or a UTF-8 replacement char mean the body isn't text at all -
+  // almost certainly raw audio frames from a stream server that sent neither an
+  // icy-* header nor an audio/* content-type.
+  if (/[\u0000\uFFFD]/.test(peek)) {
+    return { kind: 'icecast', contentType, finalUrl, matchedOn: 'binary-body' };
   }
   return { kind: 'unknown', contentType, finalUrl, matchedOn: 'none', peek: peek.slice(0, 500) };
 }
@@ -1015,12 +1041,13 @@ export async function checkBinaryAvailable(binary) {
 // analyze() sniffs the stream type once and dispatches. Each stream kind gets
 // its own top-level function that owns its fetches and returns a shape tagged
 // with `streamKind` for the frontend to branch on. HLS is the original path,
-// renamed; DASH is analyzeDash() below.
+// renamed; DASH is analyzeDash(); Icecast/SHOUTcast/RSAS is analyzeIcecast().
 // ---------------------------------------------------------------------------
 
 export async function analyze(url, { signal } = {}) {
   const kind = await sniffStreamKind(url, { signal });
   if (kind.kind === 'dash') return analyzeDash(url, { signal });
+  if (kind.kind === 'icecast') return analyzeIcecast(url, { signal });
   return analyzeHls(url, { signal });
 }
 
@@ -1495,6 +1522,186 @@ export async function analyzeDash(url, { signal } = {}) {
     networkPath,
     manifests: {
       mpd: { url: mpd.finalUrl, raw: mpd.raw },
+    },
+    errors,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Icecast / SHOUTcast / RSAS - no manifest, no segments, no variant model.
+// Station info comes from the icy-* response headers; "now playing" comes from
+// an in-stream metadata block the server injects every `icy-metaint` bytes,
+// and only when the request carries `Icy-MetaData: 1`. RSAS (Rocket Streaming
+// Audio Server) is an Icecast-compatible drop-in and needs nothing special
+// here; its own HLS endpoints are sniffed as 'hls' and take the HLS path.
+// ---------------------------------------------------------------------------
+
+// Safety cap on how far into the audio body we'll read hunting for the first
+// metadata block. icy-metaint is typically 8-16 KB, so this covers a couple of
+// intervals even on a low-bitrate stream while bounding memory hard.
+export const ICY_MAX_READ_BYTES = 512 * 1024;
+// The current title is normally in the very first metadata block; sometimes the
+// first block is empty and the next carries it. Past this many blocks we stop
+// (metadata is "supported", we just report no title).
+const ICY_MAX_INTERVALS = 2;
+
+/**
+ * Requests the stream with `Icy-MetaData: 1`, reads just far enough into the
+ * body to pull out the first in-stream metadata block, and extracts
+ * `StreamTitle`. Network chunk boundaries never line up with the icy-metaint
+ * boundaries, so bytes are accumulated and indexed absolutely.
+ *
+ * Best-effort throughout: a stream that advertises no `icy-metaint`, sends only
+ * empty metadata blocks, or ends early yields `{ streamTitle: null }` with
+ * `icyMetadataSupported` reflecting whether the mechanism exists at all - none
+ * of that is an error. StreamTitle is decoded as UTF-8 (modern Icecast/RSAS);
+ * older Latin-1 stations may render mojibake - a documented known limitation.
+ */
+export async function fetchIcyMetadata(url, { signal } = {}) {
+  const response = await fetchWithTimeout(url, {
+    method: 'GET',
+    headers: { 'Icy-MetaData': '1' },
+    signal,
+  });
+
+  const headers = headersToObject(response.headers);
+  const icyHeaders = {};
+  for (const [key, value] of Object.entries(headers)) {
+    if (key.startsWith('icy-') || key === 'ice-audio-info') icyHeaders[key] = value;
+  }
+  const metaInt = Number(headers['icy-metaint']) > 0 ? Number(headers['icy-metaint']) : null;
+
+  const result = {
+    icyHeaders,
+    metaInt,
+    icyMetadataSupported: Boolean(metaInt),
+    streamTitle: null,
+    rawMetaBlock: null,
+  };
+
+  const reader = response.body?.getReader();
+  if (!metaInt || !reader) {
+    if (reader) await reader.cancel().catch(() => {});
+    else await response.body?.cancel().catch(() => {});
+    return result;
+  }
+
+  const chunks = [];
+  let size = 0;
+  let merged = null;
+  const bytes = () => {
+    if (!merged || merged.length !== size) merged = Buffer.concat(chunks);
+    return merged;
+  };
+  const readUntil = async (n) => {
+    while (size < n && size < ICY_MAX_READ_BYTES) {
+      const { done, value } = await reader.read();
+      if (done || !value) return false;
+      chunks.push(Buffer.from(value));
+      size += value.length;
+    }
+    return size >= n;
+  };
+
+  try {
+    let intervalStart = 0;
+    for (let i = 0; i < ICY_MAX_INTERVALS; i++) {
+      const lenPos = intervalStart + metaInt;
+      if (!(await readUntil(lenPos + 1))) break;
+      const metaLen = bytes()[lenPos] * 16;
+      if (metaLen === 0) {
+        intervalStart = lenPos + 1; // next audio interval starts right after the zero byte
+        continue;
+      }
+      const metaEnd = lenPos + 1 + metaLen;
+      if (!(await readUntil(metaEnd))) break;
+      const rawBlock = bytes()
+        .subarray(lenPos + 1, metaEnd)
+        .toString('utf8')
+        .replace(/\u0000+$/, ''); // NUL-padded out to a 16-byte multiple
+      result.rawMetaBlock = rawBlock;
+      // The block is `Key='value';Key='value';...`. ICY doesn't escape a single
+      // quote inside a value, so match up to the `';` that is followed by another
+      // `Key='` or the end - not just the first quote (titles like "Nobody Knows
+      // You When You're Down" contain one).
+      const m =
+        /StreamTitle='(.*?)';(?=\w+='|\s*$)/s.exec(rawBlock) ||
+        /StreamTitle='([^']*)';?/.exec(rawBlock);
+      if (m) result.streamTitle = m[1] || null;
+      break;
+    }
+  } catch {
+    // keep the headers + whatever parsed; the isolated caller logs nothing as an error
+  } finally {
+    await reader.cancel().catch(() => {});
+  }
+  return result;
+}
+
+/**
+ * Combined Icecast/SHOUTcast/RSAS analysis. Deliberately a smaller shape than
+ * HLS or DASH - there is genuinely no manifest/variant/segment/latency model
+ * for a raw stream. Reuses fetchHeaders, computeNetworkPath, resolveDnsAddresses
+ * and runFfprobe unchanged; each fallible step in its own try/catch so one
+ * failure degrades to a warning, same as analyzeHls()/analyzeDash().
+ */
+export async function analyzeIcecast(url, { signal } = {}) {
+  const errors = {};
+
+  const connection = await fetchHeaders(url, { signal });
+
+  const networkPath = computeNetworkPath(connection.allHeaders);
+  try {
+    networkPath.dns = await resolveDnsAddresses(new URL(connection.finalUrl).hostname);
+  } catch (err) {
+    networkPath.dns = { hostname: null, addresses: [], family: null, error: err.message };
+  }
+
+  let audio = null;
+  try {
+    const probe = await runFfprobe(url, { signal });
+    audio = probe.audio;
+  } catch (err) {
+    if (signal?.aborted) throw err;
+    errors.ffprobe = { message: err.message, code: err.code || 'UNKNOWN', details: err.details };
+  }
+
+  let icy = null;
+  try {
+    icy = await fetchIcyMetadata(url, { signal });
+  } catch (err) {
+    if (signal?.aborted) throw err;
+    errors.icyMetadata = { message: err.message, code: err.code || 'UNKNOWN' };
+  }
+
+  const h = icy?.icyHeaders || {};
+  const numOrNull = (v) => {
+    const n = Number(v);
+    return v != null && v !== '' && Number.isFinite(n) ? n : null;
+  };
+
+  return {
+    streamKind: 'icecast',
+    requestedUrl: url,
+    sampleUrl: url,
+    connection,
+    networkPath,
+    audio,
+    station: {
+      name: h['icy-name'] || null,
+      genre: h['icy-genre'] || null,
+      description: h['icy-description'] || null,
+      homepageUrl: h['icy-url'] || null,
+      declaredBitrateKbps: numOrNull(h['icy-br']),
+      declaredSampleRateHz: numOrNull(h['icy-sr'] ?? h['icy-samplerate']),
+      audioInfo: h['ice-audio-info'] || null,
+      isPublic: h['icy-pub'] === '1',
+      serverSoftware: connection.server || null,
+      contentType: connection.contentType || null,
+      icyMetadataSupported: icy ? icy.icyMetadataSupported : false,
+      metaIntBytes: icy?.metaInt ?? null,
+      nowPlaying: icy?.streamTitle || null,
+      rawMetaBlock: icy?.rawMetaBlock || null,
     },
     errors,
   };
