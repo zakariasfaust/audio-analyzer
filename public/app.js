@@ -9,6 +9,7 @@ const analyzeBtn = document.getElementById('analyze-btn');
 const statusEl = document.getElementById('status');
 const resultsEl = document.getElementById('results');
 const copyBtn = document.getElementById('copy-btn');
+const faqEl = document.getElementById('faq');
 
 // Latest analysis result - kept in memory so the Copy button can build
 // the text excerpt without redoing any network requests.
@@ -1084,6 +1085,7 @@ let currentAnalyzedUrl = null;
 let baseVariantsInfo = null;
 
 async function runAnalysis(targetUrl, { isVariantSwitch = false } = {}) {
+  if (faqEl) faqEl.open = false; // collapse the FAQ so it never buries the results
   analyzeBtn.disabled = true;
   copyBtn.disabled = true;
   lastAnalyzeData = null;

@@ -2,12 +2,12 @@
 <html lang="sv">
 <head>
   <meta charset="utf-8" />
-  <title>Audio-analyzer</title>
+  <title>Audioanalyzer</title>
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
   <div id="header-row">
-    <h1>Audio-analyzer</h1>
+    <h1>Audio analyzer</h1>
     <button type="button" id="copy-btn" title="Kopiera all analysdata (utom råmanifestet) som text, t.ex. för att klistra in i en AI-tjänst" disabled>Kopiera analys</button>
   </div>
 
@@ -21,6 +21,63 @@
     />
     <button type="submit" id="analyze-btn">Analysera</button>
   </form>
+
+  <details id="faq">
+    <summary>Om verktyget</summary>
+
+    <p>
+      Audio analyzer hämtar och analyserar en ljudström: anslutning och CORS, ljudkodek,
+      segment och buffert, latens, uppmätt bitrate, "nu spelas" och det råa manifestet.
+      Hämtningarna görs på servern (CDN:er skickar sällan CORS-headers) och ljudet
+      inspekteras med <code>ffprobe</code>/<code>ffmpeg</code>. HLS (<code>.m3u8</code>),
+      MPEG-DASH (<code>.mpd</code>) och Icecast/SHOUTcast/RSAS.
+    </p>
+
+    <details>
+      <summary>Hur hittar jag HLS-adressen (<code>.m3u8</code>)?</summary>
+      <p>
+        Öppna sidan som spelar upp strömmen, öppna webbläsarens utvecklarverktyg (F12)
+        → fliken Nätverk, filtrera på <code>m3u8</code>. Starta uppspelningen — URL:en
+        som dyker upp (ofta <code>master.m3u8</code>, <code>playlist.m3u8</code> eller
+        <code>chunklist.m3u8</code>) är den du klistrar in här. Ibland ligger den också
+        direkt i sidkällan eller i en <code>&lt;video&gt;</code>/<code>&lt;source&gt;</code>-tagg.
+      </p>
+    </details>
+
+    <details>
+      <summary>Hur hittar jag DASH-adressen (<code>.mpd</code>)?</summary>
+      <p>
+        Samma sätt som för HLS: utvecklarverktyg → Nätverk, filtrera på <code>mpd</code>
+        eller <code>dash</code>. URL:en slutar på <code>.mpd</code> (ofta
+        <code>manifest.mpd</code> eller <code>Manifest.mpd</code>). DASH är vanligare
+        för TV/video än för radio.
+      </p>
+    </details>
+
+    <details>
+      <summary>Hur hittar jag Icecast-/radioadressen?</summary>
+      <p>
+        Radioströmmar är oftast en direkt URL till en "mount" — t.ex.
+        <code>.../stream</code>, <code>.../live</code>, <code>.../128</code> eller något
+        som slutar på <code>.mp3</code>/<code>.aac</code>. Hitta den genom att:
+        (1) ladda ner stationens spellista (<code>.pls</code>- eller <code>.m3u</code>-fil,
+        ofta bakom en "lyssna i extern spelare"-länk) och öppna den i en textredigerare —
+        den innehåller den råa URL:en; (2) utvecklarverktyg → Nätverk, filtrera på
+        <code>media</code> eller <code>mp3</code> medan strömmen spelar; eller (3) titta
+        i stationens egen lista över direktlänkar.
+      </p>
+    </details>
+
+    <details>
+      <summary>Varför misslyckas analysen ibland?</summary>
+      <p>
+        Vanliga orsaker: geoblockering (svar 403, ofta med tom kropp), DRM-skyddad DASH
+        (skyddet visas men ffprobe kan inte avkoda ljudet), en URL som pekar på en
+        spelarsida i stället för på själva manifestet, eller en äldre SHOUTcast v1-server
+        som svarar med raden <code>ICY 200 OK</code> i stället för vanlig HTTP.
+      </p>
+    </details>
+  </details>
 
   <p id="analyzed-url-info" hidden></p>
   <p id="status"></p>
