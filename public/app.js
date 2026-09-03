@@ -393,9 +393,8 @@ function renderNetworkPath(np) {
             : 'Hittades inte'
         }</dd>
         ${withHint('dt', 'DNS-uppslagning', 'dns-lookup')}<dd>${esc(dnsInfo.hostname) || '–'} → ${dnsResult}</dd>
-        ${withHint('dt', 'Geografisk uppskattning (IP-databas)', 'ip-geo')}<dd>${ipGeoResult} (ograskad, lokal databas - kan vara inaktuell eller fel för CDN-adresser)</dd>
+        ${withHint('dt', 'Geografisk uppskattning (IP-databas)', 'ip-geo')}<dd>${ipGeoResult} </dd>
       </dl>
-      <p class="note">DNS-baserad lastbalansering kan ge olika svar mellan anrop - detta är inte nödvändigtvis samma nod som faktiskt svarade på HTTP-anropet i Anslutning-kortet.</p>
     </section>`;
 }
 
