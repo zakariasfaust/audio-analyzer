@@ -20,7 +20,7 @@ as child processes. The frontend is plain HTML/CSS/JS with no build step or fram
 
 ## Prerequisites
 
-- Node.js 18.17 or later
+- Node.js 20 or later
 - `ffmpeg` (including `ffprobe`) installed and available in PATH
   - macOS: `brew install ffmpeg`
   - Linux: `sudo apt install ffmpeg` (or `sudo dnf install ffmpeg`)
@@ -37,14 +37,29 @@ npm start
 ```
 
 The server binds to `127.0.0.1` by default (not `0.0.0.0`) and listens on
-port `8877` by default (override with `PORT=xxxx npm start`; override the bind
-address with `HOST=xxxx npm start` - see [Security posture](#security-posture)
-below before exposing it). Open `http://127.0.0.1:8877/` in your browser, paste
+port `8877` by default. Open `http://127.0.0.1:8877/` in your browser, paste
 in a `.m3u8` URL, and click Analyze.
+
+### Environment variables
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `PORT` | `8877` | Listening port. |
+| `HOST` | `127.0.0.1` | Bind address. The Docker image sets `0.0.0.0`. See [Security posture](#security-posture). |
+| `TRUST_PROXY` | unset (off) | Number of reverse-proxy hops to trust for `X-Forwarded-For`. Set it **only** when something really does sit in front, otherwise any caller can forge the header and walk past the per-IP rate limit. |
+| `ENABLE_IP_GEO` | unset (off) | Turns on the IP-to-city estimate. Costs ~105 MB of resident memory, because `geoip-lite` loads its whole database on import. |
 
 ## Testing
 
-There are no automated tests. Manual verification:
+```bash
+npm test        # node --test, no network, no ffmpeg needed
+```
+
+The suite covers the parsers and every pure computation (segment stats, latency,
+DASH segment-URL generation), plus the frontend's escaping rules - including a
+regression test for a `javascript:` station homepage, which `esc()` alone did not
+stop. Anything that would need a real stream is left to manual verification:
+
 1. `npm start`, open the page, analyze a known HLS `.m3u8` URL, a known
    DASH `.mpd` URL, and a public Icecast/radio stream URL - each should render
    its own set of section cards.
@@ -78,32 +93,49 @@ There are no automated tests. Manual verification:
   "No ID3 metadata found" is shown - that's expected, not an error.
 - **Timeout** on all external HTTP calls and ffprobe runs is 10 seconds
   (`TIMEOUT_MS` in `server/analyzer.js`).
-- **IP-based geo estimate** on the network path card uses the bundled
-  `geoip-lite` database (offline, no external calls) - it's a rough, 
-  complement to the header-based hint, not a replacement.
+- **IP-based geo estimate** on the network path card is **off by default**. The
+  bundled `geoip-lite` database is offline (no external calls) but costs ~105 MB of
+  resident memory the moment it is imported, for a lookup that is well-known to be
+  wrong for CDN anycast addresses. Set `ENABLE_IP_GEO=1` if you want it; the
+  header-based hint next to it works either way.
 
 ## Security posture
 
-The tool is built to run locally and binds to `127.0.0.1` for that reason.
-Setting `HOST=0.0.0.0` exposes it on the network; if you do that, these are the
-protections in place - and their limits:
+`npm start` binds to `127.0.0.1`, but the Docker image sets `HOST=0.0.0.0` and this
+tool is deployed publicly - so treat internet exposure as the normal case, not the
+exception. What is in place, and where it stops:
 
-- **No login.** Anyone who can reach the URL can use it. A TLS certificate publishes the hostname in public
-  Certificate Transparency logs the moment it's issued.
+- **No login.** Anyone who can reach the URL can use it. A TLS certificate publishes
+  the hostname in public Certificate Transparency logs the moment it's issued.
 - **Per-IP rate limit** on `/api/*` - `RATE_LIMIT_MAX` / `RATE_LIMIT_WINDOW_MS`
-  in `server/index.js` (60 requests per 5 minutes). Tune to taste.
+  in `server/index.js` (60 requests per 5 minutes). It keys on `X-Forwarded-For`
+  only when `TRUST_PROXY` is set; without a proxy in front, trusting that header
+  would let any caller forge a fresh IP per request and bypass the limit entirely.
 - **Global concurrency cap** - `MAX_CONCURRENT_JOBS` in `server/index.js` (3).
   The two endpoints that spawn `ffprobe`/`ffmpeg` reject with 503 past this,
   regardless of source IP.
-- **SSRF guard** - `assertPublicHost` in `server/analyzer.js` blocks outbound
-  requests to `localhost`, private/link-local ranges, and cloud-metadata
-  addresses. For `fetch`-based traffic (manifests, headers, segment probes) it's
-  backed by an undici dispatcher that re-checks the real remote IP of every
-  connection, including each redirect hop, so bare-IP URLs, redirects into
-  private space, and DNS rebinding are all caught. `ffprobe`/`ffmpeg` do their
-  own DNS and socket work outside Node, so for those two the up-front check is
-  the only layer - a determined rebinding attack there is not fully closed.
-- **Recording is capped** - `/api/sample` records audio only (no video), 15s max.
+- **SSRF guard** - `assertPublicHost` in `server/net.js` blocks outbound requests to
+  `localhost`, private/link-local ranges, and cloud-metadata addresses. For `fetch`
+  traffic (manifests, headers, segment probes) it's backed by an undici dispatcher
+  that re-checks the real remote IP of every connection, including each redirect
+  hop, so bare-IP URLs, redirects into private space, and DNS rebinding are all
+  caught. `ffprobe`/`ffmpeg` do their own DNS and socket work outside Node, so for
+  those two the up-front check is the only layer - which is why it is called with
+  `failClosed` there: a DNS failure refuses the request rather than waving it
+  through. They also run with an explicit `-protocol_whitelist` that excludes
+  `file`, so a hostile manifest cannot point its segments at a local path. A
+  determined DNS-rebinding attack against ffmpeg is still not fully closed.
+- **Response size limits** - manifests are capped at 10 MB, MPDs at 1 MB (XML parses
+  into an object graph far larger than its byte size), and a SegmentTimeline at
+  50 000 `<S>` rows.
+- **Recording is capped** - `/api/sample` records audio only (no video), 15s max,
+  50 MB max.
+- **Browser-side** - a strict Content-Security-Policy (`default-src 'self'`) plus the
+  rest of helmet's defaults. The page renders remote-controlled strings, so every URL
+  that becomes a link is scheme-checked first; escaping alone does not stop
+  `javascript:`.
+- **The container** runs as the non-root `node` user and is built with `npm ci`, so
+  the deployed image gets exactly the versions in `package-lock.json`.
 
 ## License
 
