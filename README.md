@@ -20,7 +20,7 @@ as child processes. The frontend is plain HTML/CSS/JS with no build step or fram
 
 ## Prerequisites
 
-- Node.js 20 or later
+- Node.js 22 or later
 - `ffmpeg` (including `ffprobe`) installed and available in PATH
   - macOS: `brew install ffmpeg`
   - Linux: `sudo apt install ffmpeg` (or `sudo dnf install ffmpeg`)
