@@ -1,5 +1,6 @@
 node_modules/
 .git/
+test/
 plan.md
 hosting.md
 *.md

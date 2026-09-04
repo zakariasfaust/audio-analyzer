@@ -33,6 +33,21 @@ function esc(value) {
     .replace(/'/g, '&#39;');
 }
 
+// esc() stops an attacker breaking out of an attribute, but says nothing about the
+// URL's *scheme* - and every URL we put in an href comes from the remote server
+// (station homepage from the icy-url header, and so on). "javascript:..." survives
+// escaping untouched and would run in this page's origin on a click, so anything
+// that isn't plain http/https is rendered as text instead of as a link.
+function safeHttpUrl(value) {
+  if (!value) return null;
+  try {
+    const parsed = new URL(String(value).trim());
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:' ? parsed.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
 function fmtNumber(n, decimals = 1) {
   if (n === null || n === undefined || Number.isNaN(n)) return '–';
   return n.toLocaleString('sv-SE', { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
@@ -63,6 +78,40 @@ function fmtDateTime(iso) {
   if (Number.isNaN(d.getTime())) return esc(iso);
   const pad = (n) => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
+// ---------------------------------------------------------------------
+// Wording for the codes the server returns. The server reports what it found
+// ('timeline', 'vod', a signed TIME-OFFSET); every sentence the user reads is
+// built here, so the phrasing lives in one place instead of two.
+// ---------------------------------------------------------------------
+
+const DASH_ADDRESSING_LABELS = {
+  timeline: 'SegmentTimeline',
+  'template-number': 'SegmentTemplate ($Number$)',
+  'segment-list': 'SegmentList',
+  'base-url': 'Enkel fil (BaseURL/SegmentBase)',
+  none: 'Ingen segmentadressering hittades',
+  unknown: 'Okänd',
+};
+
+const DASH_NO_LATENCY_REASONS = {
+  vod: 'VOD (static MPD) - ingen live-fördröjning att beräkna.',
+  'no-availability-start-time': 'availabilityStartTime saknas eller kunde inte tolkas.',
+};
+
+function dashAddressingLabel(code) {
+  return DASH_ADDRESSING_LABELS[code] || DASH_ADDRESSING_LABELS.unknown;
+}
+
+// EXT-X-START: a negative TIME-OFFSET is measured back from the live edge, a
+// positive one forward from the start of the window.
+function startPointExplanation(startInfo) {
+  if (!startInfo || startInfo.timeOffset === null || startInfo.timeOffset === undefined) return null;
+  const offset = startInfo.timeOffset;
+  return offset < 0
+    ? `Spelaren startar ${fmtNumber(Math.abs(offset))} sekunder bakom livekanten.`
+    : `Spelaren startar ${fmtNumber(offset)} sekunder efter fönstrets början.`;
 }
 
 // Heading/value name with a hover explanation from STREAM_TERMS (terms.js), as a
@@ -190,7 +239,9 @@ function renderContinuity(c) {
       : `${c.discontinuityCount} st - vid sekvensnummer ${c.discontinuityPositions.map((n) => fmtInt(n)).join(', ')}.`;
 
   const startLine = c.startInfo
-    ? `TIME-OFFSET=${c.startInfo.timeOffset}${c.startInfo.precise ? ' (PRECISE)' : ''} - ${c.startExplanation}`
+    ? `TIME-OFFSET=${esc(c.startInfo.timeOffset)}${c.startInfo.precise ? ' (PRECISE)' : ''} - ${esc(
+        startPointExplanation(c.startInfo)
+      )}`
     : 'Hittades inte.';
 
   return `
@@ -333,12 +384,21 @@ function renderId3Placeholder() {
   return `<section id="sec-id3">${withHint('h2', 'Nu spelas (ID3)', 'id3')}<p class="note">Hämtar…</p></section>`;
 }
 
+// Warnings from /api/sample. "No metadata found" is a claim about the stream;
+// it is only honest when the tools that looked actually ran, so when one of them
+// failed that gets said out loud next to the result rather than folded into it.
+function renderSampleWarnings(sample) {
+  const warnings = sample?.warnings || [];
+  if (!warnings.length) return '';
+  return `<p class="note error">${warnings.map((w) => esc(w.message)).join('<br />')}</p>`;
+}
+
 function renderId3(sample, error) {
   if (error) {
     return `${withHint('h2', 'Nu spelas (ID3)', 'id3')}<p class="error">${esc(error.message)}</p>`;
   }
   if (!sample.id3.available) {
-    return `${withHint('h2', 'Nu spelas (ID3)', 'id3')}<p class="note">Ingen ID3-metadata hittades i den här strömmen (inspelning: ${fmtDuration(
+    return `${withHint('h2', 'Nu spelas (ID3)', 'id3')}${renderSampleWarnings(sample)}<p class="note">Ingen ID3-metadata hittades i den här strömmen (inspelning: ${fmtDuration(
       sample.actualDurationSec
     )}, uppmätt ${fmtNumber(sample.measuredBitrateKbps)} kbit/s).</p>`;
   }
@@ -353,6 +413,7 @@ function renderId3(sample, error) {
     .join('');
   return `
     ${withHint('h2', 'Nu spelas (ID3)', 'id3')}
+    ${renderSampleWarnings(sample)}
     <table>
       <thead><tr>${withHint('th', 'Tid i segment', 'tid-i-segment')}${withHint('th', 'Taggar', 'taggar')}</tr></thead>
       <tbody>${rows}</tbody>
@@ -377,11 +438,14 @@ function renderNetworkPath(np) {
     ? esc(dnsInfo.addresses.join(', '))
     : 'Inga adresser hittades';
 
-  const ipGeoResult = (dnsInfo.ipGeo || []).some((g) => g)
-    ? dnsInfo.ipGeo
-        .map((g, i) => `${esc(dnsInfo.addresses[i])}: ${g ? `${esc(g.city || '–')}, ${esc(g.country || '–')}` : 'okänd'}`)
-        .join('; ')
-    : 'Hittades inte';
+  const ipGeoResult =
+    dnsInfo.ipGeoEnabled === false
+      ? 'Avstängd — IP-databasen kostar ~110 MB minne. Sätt ENABLE_IP_GEO=1 på servern för att slå på den.'
+      : (dnsInfo.ipGeo || []).some((g) => g)
+      ? dnsInfo.ipGeo
+          .map((g, i) => `${esc(dnsInfo.addresses[i])}: ${g ? `${esc(g.city || '–')}, ${esc(g.country || '–')}` : 'okänd'}`)
+          .join('; ')
+      : 'Hittades inte';
 
   return `
     <section id="sec-network">
@@ -399,8 +463,22 @@ function renderNetworkPath(np) {
     </section>`;
 }
 
+// A media playlist for a long DVR window runs to thousands of lines, and the server
+// accepts one up to MAX_MANIFEST_BYTES. Escaping all of that into a <pre> is what
+// actually locks the tab up, so only the head is rendered and the rest is summarised.
+const MAX_MANIFEST_LINES_SHOWN = 500;
+
 function renderRawManifest(label, url, raw) {
-  return `<h3>${esc(label)} (${esc(url)})</h3><pre>${esc(raw)}</pre>`;
+  const lines = String(raw ?? '').split('\n');
+  const shown = lines.slice(0, MAX_MANIFEST_LINES_SHOWN).join('\n');
+  const hidden = lines.length - MAX_MANIFEST_LINES_SHOWN;
+  const more =
+    hidden > 0
+      ? `<p class="note">Visar de första ${fmtInt(MAX_MANIFEST_LINES_SHOWN)} raderna av ${fmtInt(
+          lines.length
+        )}. Öppna URL:en ovan för att se hela manifestet.</p>`
+      : '';
+  return `<h3>${esc(label)} (${esc(url)})</h3><pre>${esc(shown)}</pre>${more}`;
 }
 
 function renderManifests(m) {
@@ -430,9 +508,22 @@ function renderDashManifest(m) {
 // Unlike HLS variant rows, DASH representation rows are NOT click-to-reanalyse:
 // the whole MPD is already fetched, there is no separate URL per representation
 // to re-request. A genuine UX difference, not a missing feature.
+// The two v1 scope limits, phrased once and used by both the card and the copy text.
+function dashRepresentationNotes(reps) {
+  return [
+    reps.multiPeriod
+      ? `MPD:n har ${fmtInt(reps.periodCount)} perioder. Endast period ${reps.periodIndex + 1} (id "${
+          reps.periodId
+        }") analyseras - övriga perioders data blandas inte in.`
+      : null,
+    reps.hasXlink
+      ? 'Den analyserade perioden refererar en extern (xlink) period. Den hämtas inte och ingår inte i analysen.'
+      : null,
+  ].filter(Boolean);
+}
+
 function renderDashRepresentations(reps) {
-  const notes = [reps.multiPeriodNote, reps.xlinkNote]
-    .filter(Boolean)
+  const notes = dashRepresentationNotes(reps)
     .map((n) => `<p class="note error">${esc(n)}</p>`)
     .join('');
 
@@ -478,7 +569,7 @@ function renderDashSegments(s) {
       ${withHint('h2', 'Segment och buffert', 'segment')}
       <dl>
         ${withHint('dt', 'Presentationstyp', 'presentationtype')}<dd>${s.isLive ? 'Live (dynamic)' : 'VOD (static)'}</dd>
-        ${withHint('dt', 'Segmentadressering', 'segmenttemplate')}<dd>${esc(s.segmentAddressing)}</dd>
+        ${withHint('dt', 'Segmentadressering', 'segmenttemplate')}<dd>${esc(dashAddressingLabel(s.segmentAddressing))}</dd>
         ${withHint('dt', 'Segmentlängd', 'snittlangd')}<dd>${fmtDuration(s.segmentDurationSec)}</dd>
         ${withHint('dt', 'Antal segment', 'antal-segment')}<dd>${s.segmentCount != null ? fmtInt(s.segmentCount) : '–'}${s.isLive ? ' (uppskattat)' : ''}</dd>
         ${withHint('dt', 'Fönster / DVR-djup', 'timeshiftbufferdepth')}<dd>${fmtDuration(s.windowSeconds)}</dd>
@@ -497,7 +588,7 @@ function renderDashLatency(l) {
     return `
       <section id="sec-latency">
         ${withHint('h2', 'Latens', 'latens')}
-        <p class="note">${esc(l.reason || 'Latens kan inte beräknas för den här strömmen.')}</p>
+        <p class="note">${esc(DASH_NO_LATENCY_REASONS[l.reason] || 'Latens kan inte beräknas för den här strömmen.')}</p>
       </section>`;
   }
   const methodLabel = l.method === 'declared' ? 'Deklarerad i manifestet' : 'Uppskattad från segmentlängd';
@@ -545,9 +636,12 @@ function renderIcecastStation(st) {
       : `<span class="note">Metadata är påslaget (var ${fmtInt(st.metaIntBytes)} byte) men inget titelblock hann skickas innan provet var klart.</span>`
     : '<span class="note">Strömmen skickar ingen låttitel i ljudflödet (icy-metaint saknas). Vanligt - inte ett fel.</span>';
 
-  const homepage = st.homepageUrl
-    ? `<a href="${esc(st.homepageUrl)}" target="_blank" rel="noopener">${esc(st.homepageUrl)}</a>`
-    : '–';
+  // Not linkified unless it is a real http(s) URL - see safeHttpUrl(). A station
+  // that sends something else still gets its value shown, just as inert text.
+  const homepageUrl = safeHttpUrl(st.homepageUrl);
+  const homepage = homepageUrl
+    ? `<a href="${esc(homepageUrl)}" target="_blank" rel="noopener">${esc(homepageUrl)}</a>`
+    : esc(st.homepageUrl) || '–';
 
   return `
     <section id="sec-station">
@@ -596,6 +690,7 @@ function renderIcecastSample(sample, error) {
 
   return `
     ${head}
+    ${renderSampleWarnings(sample)}
     <dl>
       ${withHint('dt', 'Uppmätt bitrate', 'snitt-uppmatt')}<dd>${sample.measuredBitrateKbps ? fmtNumber(sample.measuredBitrateKbps) + ' kbit/s' : '–'}</dd>
       ${withHint('dt', 'Inspelad längd', 'inspelad-langd')}<dd>${fmtDuration(sample.actualDurationSec)}</dd>
@@ -646,21 +741,11 @@ function renderFatalError(err) {
 // segment list and adds nothing for an AI analysis of the stream's properties).
 // ---------------------------------------------------------------------
 
-function buildCopyText(data, sample, sampleError, variantsOverride) {
-  if (data.streamKind === 'dash') return buildDashCopyText(data, sample, sampleError);
-  if (data.streamKind === 'icecast') return buildIcecastCopyText(data, sample, sampleError);
+// Sections that are identical across all three stream kinds. They used to be
+// copy-pasted into each of the three builders below, which is how the HLS version
+// ended up with an Expires line the other two silently lacked.
 
-  const lines = [];
-  const add = (line = '') => lines.push(line);
-
-  add(`Strömanalys (HLS): ${data.requestedUrl}`);
-  if (currentMasterUrl && currentAnalyzedUrl && currentAnalyzedUrl !== currentMasterUrl) {
-    add(`(Variant vald från master: ${currentMasterUrl})`);
-  }
-  add(`Genererad: ${fmtDateTime(new Date().toISOString())}`);
-  add('');
-
-  const c = data.connection;
+function addConnection(add, c) {
   add('ANSLUTNING');
   add(`Status: ${c.status} ${c.statusText}`);
   add(`Begärd URL: ${c.requestedUrl}`);
@@ -676,6 +761,92 @@ function buildCopyText(data, sample, sampleError, variantsOverride) {
     extraHeaders.forEach(([k, v]) => add(`  ${k}: ${v}`));
   }
   add('');
+}
+
+function addAudio(add, a) {
+  add('LJUDSPÅRET');
+  if (a) {
+    add(`Codec: ${a.codec || '–'}${a.profile ? ' (' + a.profile + ')' : ''}`);
+    add(`Samplingsfrekvens: ${a.sampleRate ? fmtInt(a.sampleRate) + ' Hz' : '–'}`);
+    add(`Kanaler: ${a.channels ?? '–'}${a.channelLayout ? ' (' + a.channelLayout + ')' : ''}`);
+    add(`Bitrate: ${a.bitRate ? fmtNumber(a.bitRate / 1000) + ' kbit/s' : 'okänd'}`);
+    add(`Container: ${a.container || '–'}`);
+  } else {
+    add('Kunde inte hämtas (se varningar).');
+  }
+  add('');
+}
+
+function addNetworkPath(add, np) {
+  add('NÄTVERKSVÄG');
+  const npHeaders = Object.entries(np.headers || {});
+  if (npHeaders.length) npHeaders.forEach(([k, v]) => add(`  ${k}: ${v}`));
+  else add('Inga matchande routing-headrar hittades.');
+  add(`Möjlig geografisk ledtråd: ${np.geoHint ? `${np.geoHint.raw} (ogranskad gissning)` : 'Hittades inte'}`);
+
+  const dnsInfo = np.dns || {};
+  add(
+    `DNS-uppslagning (${dnsInfo.hostname || '–'}): ${
+      dnsInfo.error ? `kunde inte slås upp (${dnsInfo.error})` : dnsInfo.addresses?.join(', ') || 'inga adresser'
+    }`
+  );
+
+  const ipGeoList = dnsInfo.ipGeo || [];
+  const ipGeoText =
+    dnsInfo.ipGeoEnabled === false
+      ? 'avstängd (ENABLE_IP_GEO=1 för att slå på)'
+      : ipGeoList.some((g) => g)
+      ? ipGeoList.map((g, i) => `${dnsInfo.addresses[i]}: ${g ? `${g.city || '–'}, ${g.country || '–'}` : 'okänd'}`).join('; ')
+      : 'Hittades inte';
+  add(`Geografisk uppskattning (IP-databas, ogranskad): ${ipGeoText}`);
+  add('');
+}
+
+function addSample(add, sample, sampleError, heading) {
+  add(heading);
+  if (sampleError) {
+    add(`Kunde inte hämtas: ${sampleError.message}`);
+    return;
+  }
+  if (!sample) {
+    add('Hämtades inte (analysen avbröts eller väntar fortfarande).');
+    return;
+  }
+  (sample.warnings || []).forEach((w) => add(`OBS: ${w.message}`));
+  if (!sample.id3?.available) {
+    add(
+      `Ingen ID3-metadata hittades (inspelning: ${fmtDuration(sample.actualDurationSec)}, uppmätt ${fmtNumber(
+        sample.measuredBitrateKbps
+      )} kbit/s).`
+    );
+    return;
+  }
+  sample.id3.frames.forEach((f) => add(`  ${fmtDuration(f.ptsTime)}: ${JSON.stringify(f.tags)}`));
+}
+
+function addWarnings(add, errors) {
+  const entries = Object.entries(errors || {});
+  if (!entries.length) return;
+  add('');
+  add('VARNINGAR (delvis resultat)');
+  entries.forEach(([key, e]) => add(`- ${key}: ${e.message}`));
+}
+
+function buildCopyText(data, sample, sampleError, variantsOverride) {
+  if (data.streamKind === 'dash') return buildDashCopyText(data, sample, sampleError);
+  if (data.streamKind === 'icecast') return buildIcecastCopyText(data, sample, sampleError);
+
+  const lines = [];
+  const add = (line = '') => lines.push(line);
+
+  add(`Strömanalys (HLS): ${data.requestedUrl}`);
+  if (currentMasterUrl && currentAnalyzedUrl && currentAnalyzedUrl !== currentMasterUrl) {
+    add(`(Variant vald från master: ${currentMasterUrl})`);
+  }
+  add(`Genererad: ${fmtDateTime(new Date().toISOString())}`);
+  add('');
+
+  addConnection(add, data.connection);
 
   const v = variantsOverride || data.variants;
   add('VARIANTER');
@@ -692,18 +863,7 @@ function buildCopyText(data, sample, sampleError, variantsOverride) {
   }
   add('');
 
-  const a = data.audio;
-  add('LJUDSPÅRET');
-  if (a) {
-    add(`Codec: ${a.codec || '–'}${a.profile ? ' (' + a.profile + ')' : ''}`);
-    add(`Samplingsfrekvens: ${a.sampleRate ? fmtInt(a.sampleRate) + ' Hz' : '–'}`);
-    add(`Kanaler: ${a.channels ?? '–'}${a.channelLayout ? ' (' + a.channelLayout + ')' : ''}`);
-    add(`Bitrate: ${a.bitRate ? fmtNumber(a.bitRate / 1000) + ' kbit/s' : 'okänd'}`);
-    add(`Container: ${a.container || '–'}`);
-  } else {
-    add('Kunde inte hämtas.');
-  }
-  add('');
+  addAudio(add, data.audio);
 
   const s = data.segments;
   add('SEGMENT OCH BUFFERT');
@@ -726,33 +886,16 @@ function buildCopyText(data, sample, sampleError, variantsOverride) {
       ? 'Discontinuities: inga i det aktuella fönstret.'
       : `Discontinuities: ${cont.discontinuityCount} st - vid sekvensnummer ${cont.discontinuityPositions.join(', ')}.`
   );
-  add(`EXT-X-START: ${cont.startInfo ? `TIME-OFFSET=${cont.startInfo.timeOffset} - ${cont.startExplanation}` : 'Hittades inte.'}`);
+  add(
+    `EXT-X-START: ${
+      cont.startInfo
+        ? `TIME-OFFSET=${cont.startInfo.timeOffset} - ${startPointExplanation(cont.startInfo)}`
+        : 'Hittades inte.'
+    }`
+  );
   add('');
 
-  const np = data.networkPath;
-  add('NÄTVERKSVÄG');
-  const npHeaders = Object.entries(np.headers || {});
-  if (npHeaders.length) {
-    npHeaders.forEach(([k, v]) => add(`  ${k}: ${v}`));
-  } else {
-    add('Inga matchande routing-headrar hittades.');
-  }
-  add(`Möjlig geografisk ledtråd: ${np.geoHint ? `${np.geoHint.raw} (ogranskad gissning)` : 'Hittades inte'}`);
-  const dnsInfo = np.dns || {};
-  add(
-    `DNS-uppslagning (${dnsInfo.hostname || '–'}): ${
-      dnsInfo.error ? `kunde inte slås upp (${dnsInfo.error})` : dnsInfo.addresses?.join(', ') || 'inga adresser'
-    }`
-  );
-  const ipGeoList = dnsInfo.ipGeo || [];
-  add(
-    `Geografisk uppskattning (IP-databas, ogranskad): ${
-      ipGeoList.some((g) => g)
-        ? ipGeoList.map((g, i) => `${dnsInfo.addresses[i]}: ${g ? `${g.city || '–'}, ${g.country || '–'}` : 'okänd'}`).join('; ')
-        : 'Hittades inte'
-    }`
-  );
-  add('');
+  addNetworkPath(add, data.networkPath);
 
   const l = data.latency;
   add('LATENS');
@@ -806,29 +949,8 @@ function buildCopyText(data, sample, sampleError, variantsOverride) {
   }
   add('');
 
-  add('NU SPELAS (ID3)');
-  if (sampleError) {
-    add(`Kunde inte hämtas: ${sampleError.message}`);
-  } else if (sample) {
-    if (!sample.id3.available) {
-      add(
-        `Ingen ID3-metadata hittades (inspelning: ${fmtDuration(sample.actualDurationSec)}, uppmätt ${fmtNumber(
-          sample.measuredBitrateKbps
-        )} kbit/s).`
-      );
-    } else {
-      sample.id3.frames.forEach((f) => add(`  ${fmtDuration(f.ptsTime)}: ${JSON.stringify(f.tags)}`));
-    }
-  } else {
-    add('Hämtades inte (analysen avbröts eller väntar fortfarande).');
-  }
-
-  const errorEntries = Object.entries(data.errors || {});
-  if (errorEntries.length) {
-    add('');
-    add('VARNINGAR (delvis resultat)');
-    errorEntries.forEach(([key, e]) => add(`- ${key}: ${e.message}`));
-  }
+  addSample(add, sample, sampleError, 'NU SPELAS (ID3)');
+  addWarnings(add, data.errors);
 
   return lines.join('\n');
 }
@@ -843,41 +965,13 @@ function buildDashCopyText(data, sample, sampleError) {
   add(`Genererad: ${fmtDateTime(new Date().toISOString())}`);
   add('');
 
-  const c = data.connection;
-  add('ANSLUTNING');
-  add(`Status: ${c.status} ${c.statusText}`);
-  add(`Begärd URL: ${c.requestedUrl}`);
-  add(`Slutlig URL: ${c.finalUrl}${c.redirected ? ' (omdirigerad)' : ''}`);
-  add(`Content-Type: ${c.contentType || '–'}`);
-  add(`Server: ${c.server || '–'}`);
-  add(`Cache-Control: ${c.cacheControl || '–'}`);
-  add(`CORS: ${c.cors.present ? `Ja (${c.cors.allowOrigin})` : 'Nej - saknas'}`);
-  const extraHeaders = Object.entries(c.extraHeaders || {});
-  if (extraHeaders.length) {
-    add('x-/akamai-/icy-headers:');
-    extraHeaders.forEach(([k, v]) => add(`  ${k}: ${v}`));
-  }
-  add('');
-
-  const np = data.networkPath;
-  add('NÄTVERKSVÄG');
-  const npHeaders = Object.entries(np.headers || {});
-  if (npHeaders.length) npHeaders.forEach(([k, v]) => add(`  ${k}: ${v}`));
-  else add('Inga matchande routing-headrar hittades.');
-  add(`Möjlig geografisk ledtråd: ${np.geoHint ? `${np.geoHint.raw} (ogranskad gissning)` : 'Hittades inte'}`);
-  const dnsInfo = np.dns || {};
-  add(
-    `DNS-uppslagning (${dnsInfo.hostname || '–'}): ${
-      dnsInfo.error ? `kunde inte slås upp (${dnsInfo.error})` : dnsInfo.addresses?.join(', ') || 'inga adresser'
-    }`
-  );
-  add('');
+  addConnection(add, data.connection);
+  addNetworkPath(add, data.networkPath);
 
   const r = data.representations;
   add('REPRESENTATIONER');
   add(`Analyserad: ${r.chosenId || '–'} (period ${r.periodIndex + 1} av ${r.periodCount})`);
-  if (r.multiPeriodNote) add(r.multiPeriodNote);
-  if (r.xlinkNote) add(r.xlinkNote);
+  dashRepresentationNotes(r).forEach((note) => add(note));
   r.list.forEach((rep) => {
     const size = rep.width && rep.height ? `${rep.width}×${rep.height}` : rep.audioSamplingRate ? `${rep.audioSamplingRate} Hz` : '–';
     add(
@@ -888,23 +982,12 @@ function buildDashCopyText(data, sample, sampleError) {
   });
   add('');
 
-  const a = data.audio;
-  add('LJUDSPÅRET');
-  if (a) {
-    add(`Codec: ${a.codec || '–'}${a.profile ? ' (' + a.profile + ')' : ''}`);
-    add(`Samplingsfrekvens: ${a.sampleRate ? fmtInt(a.sampleRate) + ' Hz' : '–'}`);
-    add(`Kanaler: ${a.channels ?? '–'}${a.channelLayout ? ' (' + a.channelLayout + ')' : ''}`);
-    add(`Bitrate: ${a.bitRate ? fmtNumber(a.bitRate / 1000) + ' kbit/s' : 'okänd'}`);
-    add(`Container: ${a.container || '–'}`);
-  } else {
-    add('Kunde inte hämtas (se varningar).');
-  }
-  add('');
+  addAudio(add, data.audio);
 
   const s = data.segments;
   add('SEGMENT OCH BUFFERT');
   add(`Presentationstyp: ${s.isLive ? 'Live (dynamic)' : 'VOD (static)'}`);
-  add(`Segmentadressering: ${s.segmentAddressing}`);
+  add(`Segmentadressering: ${dashAddressingLabel(s.segmentAddressing)}`);
   add(`Segmentlängd: ${fmtDuration(s.segmentDurationSec)}`);
   add(`Antal segment: ${s.segmentCount != null ? fmtInt(s.segmentCount) : '–'}${s.isLive ? ' (uppskattat)' : ''}`);
   add(`Fönster / DVR-djup: ${fmtDuration(s.windowSeconds)}`);
@@ -925,7 +1008,7 @@ function buildDashCopyText(data, sample, sampleError) {
   const l = data.latency;
   add('LATENS');
   if (!l.available) {
-    add(l.reason || 'Latens kan inte beräknas.');
+    add(DASH_NO_LATENCY_REASONS[l.reason] || 'Latens kan inte beräknas.');
   } else {
     add(`Beräkningsmetod: ${l.method === 'declared' ? 'Deklarerad i manifestet' : 'Uppskattad från segmentlängd'}`);
     add(`availabilityStartTime: ${fmtDateTime(l.availabilityStartTime)}${l.epochAnchored ? ' (epoch-förankrad)' : ''}`);
@@ -953,29 +1036,8 @@ function buildDashCopyText(data, sample, sampleError) {
   }
   add('');
 
-  add('NU SPELAS (ID3)');
-  if (sampleError) {
-    add(`Kunde inte hämtas: ${sampleError.message}`);
-  } else if (sample) {
-    if (!sample.id3.available) {
-      add(
-        `Ingen ID3-metadata hittades (inspelning: ${fmtDuration(sample.actualDurationSec)}, uppmätt ${fmtNumber(
-          sample.measuredBitrateKbps
-        )} kbit/s).`
-      );
-    } else {
-      sample.id3.frames.forEach((f) => add(`  ${fmtDuration(f.ptsTime)}: ${JSON.stringify(f.tags)}`));
-    }
-  } else {
-    add('Hämtades inte (analysen avbröts eller väntar fortfarande).');
-  }
-
-  const errorEntries = Object.entries(data.errors || {});
-  if (errorEntries.length) {
-    add('');
-    add('VARNINGAR (delvis resultat)');
-    errorEntries.forEach(([key, e]) => add(`- ${key}: ${e.message}`));
-  }
+  addSample(add, sample, sampleError, 'NU SPELAS (ID3)');
+  addWarnings(add, data.errors);
 
   return lines.join('\n');
 }
@@ -990,20 +1052,7 @@ function buildIcecastCopyText(data, sample, sampleError) {
   add(`Genererad: ${fmtDateTime(new Date().toISOString())}`);
   add('');
 
-  const c = data.connection;
-  add('ANSLUTNING');
-  add(`Status: ${c.status} ${c.statusText}`);
-  add(`Begärd URL: ${c.requestedUrl}`);
-  add(`Slutlig URL: ${c.finalUrl}${c.redirected ? ' (omdirigerad)' : ''}`);
-  add(`Content-Type: ${c.contentType || '–'}`);
-  add(`Server: ${c.server || '–'}`);
-  add(`CORS: ${c.cors.present ? `Ja (${c.cors.allowOrigin})` : 'Nej - saknas'}`);
-  const extraHeaders = Object.entries(c.extraHeaders || {});
-  if (extraHeaders.length) {
-    add('x-/akamai-/icy-headers:');
-    extraHeaders.forEach(([k, v]) => add(`  ${k}: ${v}`));
-  }
-  add('');
+  addConnection(add, data.connection);
 
   const st = data.station || {};
   add('STATION');
@@ -1025,36 +1074,14 @@ function buildIcecastCopyText(data, sample, sampleError) {
   if (st.rawMetaBlock) add(`Rått metadatablock: ${st.rawMetaBlock}`);
   add('');
 
-  const a = data.audio;
-  add('LJUDSPÅRET');
-  if (a) {
-    add(`Codec: ${a.codec || '–'}${a.profile ? ' (' + a.profile + ')' : ''}`);
-    add(`Samplingsfrekvens: ${a.sampleRate ? fmtInt(a.sampleRate) + ' Hz' : '–'}`);
-    add(`Kanaler: ${a.channels ?? '–'}${a.channelLayout ? ' (' + a.channelLayout + ')' : ''}`);
-    add(`Bitrate: ${a.bitRate ? fmtNumber(a.bitRate / 1000) + ' kbit/s' : 'okänd'}`);
-    add(`Container: ${a.container || '–'}`);
-  } else {
-    add('Kunde inte hämtas (se varningar).');
-  }
-  add('');
-
-  const np = data.networkPath;
-  add('NÄTVERKSVÄG');
-  const npHeaders = Object.entries(np.headers || {});
-  if (npHeaders.length) npHeaders.forEach(([k, v]) => add(`  ${k}: ${v}`));
-  else add('Inga matchande routing-headrar hittades.');
-  const dnsInfo = np.dns || {};
-  add(
-    `DNS-uppslagning (${dnsInfo.hostname || '–'}): ${
-      dnsInfo.error ? `kunde inte slås upp (${dnsInfo.error})` : dnsInfo.addresses?.join(', ') || 'inga adresser'
-    }`
-  );
-  add('');
+  addAudio(add, data.audio);
+  addNetworkPath(add, data.networkPath);
 
   add('LJUDPROV');
   if (sampleError) {
     add(`Kunde inte hämtas: ${sampleError.message}`);
   } else if (sample) {
+    (sample.warnings || []).forEach((w) => add(`OBS: ${w.message}`));
     add(`Uppmätt bitrate: ${sample.measuredBitrateKbps ? fmtNumber(sample.measuredBitrateKbps) + ' kbit/s' : '–'}`);
     add(`Inspelad längd: ${fmtDuration(sample.actualDurationSec)}`);
     add(
@@ -1072,12 +1099,7 @@ function buildIcecastCopyText(data, sample, sampleError) {
     add('Hämtades inte (analysen avbröts eller väntar fortfarande).');
   }
 
-  const errorEntries = Object.entries(data.errors || {});
-  if (errorEntries.length) {
-    add('');
-    add('VARNINGAR (delvis resultat)');
-    errorEntries.forEach(([key, e]) => add(`- ${key}: ${e.message}`));
-  }
+  addWarnings(add, data.errors);
 
   return lines.join('\n');
 }
@@ -1099,7 +1121,16 @@ let currentMasterUrl = null;
 let currentAnalyzedUrl = null;
 let baseVariantsInfo = null;
 
+// Disabling the Analyze button does not stop a variant row from being clicked, and
+// the sample phase alone runs 8-20 s - so two runs could overlap. Every run takes a
+// token; when a newer run has started, the older one stops touching shared state
+// instead of overwriting the newer run's results and clearing its status line.
+let runToken = 0;
+
 async function runAnalysis(targetUrl, { isVariantSwitch = false } = {}) {
+  const myToken = ++runToken;
+  const isStale = () => myToken !== runToken;
+
   if (faqEl) faqEl.open = false; // collapse the FAQ so it never buries the results
   analyzeBtn.disabled = true;
   copyBtn.disabled = true;
@@ -1126,6 +1157,7 @@ async function runAnalysis(targetUrl, { isVariantSwitch = false } = {}) {
       body: JSON.stringify({ url: targetUrl }),
     });
     const body = await res.json();
+    if (isStale()) return;
     if (!res.ok) {
       resultsEl.innerHTML = renderFatalError(body.error);
       statusEl.textContent = '';
@@ -1134,6 +1166,7 @@ async function runAnalysis(targetUrl, { isVariantSwitch = false } = {}) {
     }
     data = body;
   } catch (err) {
+    if (isStale()) return;
     resultsEl.innerHTML = renderFatalError({ message: 'Kunde inte nå servern: ' + err.message, details: {} });
     statusEl.textContent = '';
     analyzeBtn.disabled = false;
@@ -1185,22 +1218,28 @@ async function runAnalysis(targetUrl, { isVariantSwitch = false } = {}) {
   const sampleSection = document.getElementById(isIcecast ? 'sec-icecast-sample' : 'sec-id3');
   const renderSample = (body, error) =>
     isIcecast ? renderIcecastSample(body, error) : renderId3(body, error);
-  try {
-    const sampleTarget = data.sampleUrl || data.variants?.chosenVariantUrl;
-    const sampleUrl = '/api/sample?url=' + encodeURIComponent(sampleTarget) + '&secs=8';
-    const res = await fetch(sampleUrl);
-    const body = await res.json();
-    if (res.ok) {
-      sampleSection.innerHTML = renderSample(body, null);
-      lastSampleData = body;
-    } else {
-      sampleSection.innerHTML = renderSample(null, body.error);
-      lastSampleError = body.error;
+  const sampleTarget = data.sampleUrl || data.variants?.chosenVariantUrl;
+  if (!sampleTarget) {
+    sampleSection.innerHTML = renderSample(null, { message: 'Ingen URL att spela in ett prov från.' });
+  } else {
+    try {
+      const sampleUrl = '/api/sample?url=' + encodeURIComponent(sampleTarget) + '&secs=8';
+      const res = await fetch(sampleUrl);
+      const body = await res.json();
+      if (isStale()) return;
+      if (res.ok) {
+        sampleSection.innerHTML = renderSample(body, null);
+        lastSampleData = body;
+      } else {
+        sampleSection.innerHTML = renderSample(null, body.error);
+        lastSampleError = body.error;
+      }
+    } catch (err) {
+      if (isStale()) return;
+      const fetchError = { message: 'Kunde inte nå servern: ' + err.message };
+      sampleSection.innerHTML = renderSample(null, fetchError);
+      lastSampleError = fetchError;
     }
-  } catch (err) {
-    const fetchError = { message: 'Kunde inte nå servern: ' + err.message };
-    sampleSection.innerHTML = renderSample(null, fetchError);
-    lastSampleError = fetchError;
   }
 
   statusEl.textContent = '';
