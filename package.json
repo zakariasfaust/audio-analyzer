@@ -5,7 +5,7 @@
   "description": "Verktyg för att analysera ljudströmmar - manifest, kodekar, buffert, latens, bitrate och ID3-metadata",
   "type": "module",
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "scripts": {
     "start": "node server/index.js",

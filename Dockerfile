@@ -1,9 +1,9 @@
-# Node 22 + ffmpeg (ger även ffprobe). Alpine i stället för Debian: mindre image,
-# färre kända CVE:er i basen (Alpine har ett betydligt mindre paketspann än Debian).
-# Inga av projektets npm-paket har native bindings, så musl libc (Alpines C-bibliotek,
-# i stället för Debians glibc) kräver ingen extra kompilatorkedja här.
-# Railway väljer denna framför Nixpacks/Railpack.
-FROM node:22-alpine
+# Node 24 (Active LTS sedan 2025-10-28, se https://nodejs.org/en/about/previous-releases)
+# + ffmpeg (ger även ffprobe). Alpine i stället för Debian: mindre image, färre kända
+# CVE:er i basen. Inga av projektets npm-paket har native bindings, så musl libc
+# (Alpines C-bibliotek, i stället för Debians glibc) kräver ingen extra
+# kompilatorkedja här. Railway väljer denna framför Nixpacks/Railpack.
+FROM node:24-alpine
 
 RUN apk add --no-cache ffmpeg
 
