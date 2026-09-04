@@ -6,22 +6,23 @@
 
 import express from 'express';
 import rateLimit from 'express-rate-limit';
+import helmet from 'helmet';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setMaxListeners } from 'node:events';
 
-import {
-  AppError,
-  validateUrl,
-  sampleStream,
-  analyze,
-  checkBinaryAvailable,
-} from './analyzer.js';
+import { AppError } from './errors.js';
+import { validateUrl } from './net.js';
+import { sampleStream, checkBinaryAvailable } from './ffmpeg.js';
+import { analyze } from './analyzer.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 const PORT = Number(process.env.PORT) || 8877;
 const HOST = process.env.HOST || '127.0.0.1';
+// Number of reverse-proxy hops to trust for X-Forwarded-For. Off unless set - see
+// where it is applied below for why the default matters.
+const TRUST_PROXY = Number(process.env.TRUST_PROXY) || false;
 const RATE_LIMIT_WINDOW_MS = 5 * 60 * 1000;
 const RATE_LIMIT_MAX = 60; // per IP, per window - roomy for interactive use (a full Analyze is 2 calls), still a brake on scripted hammering
 // Hard ceiling on analyses running at once, across all callers. A per-IP rate
@@ -36,17 +37,41 @@ const MAX_CONCURRENT_JOBS = 3;
 const REQUEST_DEADLINE_MS = 90_000;
 
 const app = express();
-// When deployed, a reverse proxy sits in front; trust exactly one hop so the
-// rate limiter keys on the real client IP from X-Forwarded-For rather than the
-// proxy's. Harmless for local `npm start` (there is no forwarded header to read).
-app.set('trust proxy', 1);
+// Trusting X-Forwarded-For means believing whoever sent it. Behind the deployment's
+// reverse proxy that is right (TRUST_PROXY=1 - trust exactly one hop, so the rate
+// limiter keys on the real client IP). With nothing in front, it hands every caller
+// a free rate-limit bypass: send a random X-Forwarded-For per request and the per-IP
+// window never fills. So it is opt-in, and off by default.
+app.set('trust proxy', TRUST_PROXY);
+// The page loads no external scripts, styles, fonts or images, so a strict CSP costs
+// nothing here - and it is the second layer under safeHttpUrl() in public/app.js,
+// since this UI renders remote-controlled strings through innerHTML throughout.
+app.use(
+  helmet({
+    contentSecurityPolicy: {
+      useDefaults: false,
+      directives: {
+        defaultSrc: ["'self'"],
+        scriptSrc: ["'self'"],
+        styleSrc: ["'self'"],
+        imgSrc: ["'self'", 'data:'],
+        connectSrc: ["'self'"],
+        objectSrc: ["'none'"],
+        baseUri: ["'none'"],
+        formAction: ["'none'"],
+        frameAncestors: ["'none'"],
+      },
+    },
+  })
+);
 app.use(express.json());
 app.use(express.static(PUBLIC_DIR));
 app.use(
   '/api',
   rateLimit({
     windowMs: RATE_LIMIT_WINDOW_MS,
-    max: RATE_LIMIT_MAX,
+    limit: RATE_LIMIT_MAX, // `max` is the deprecated spelling in express-rate-limit v7+
+
     standardHeaders: true,
     legacyHeaders: false,
   })
@@ -89,6 +114,7 @@ const STATUS_BY_CODE = {
   REQUEST_TIMEOUT: 504,
   REQUEST_ABORTED: 499, // client went away; response is never actually sent
   UPSTREAM_HTTP_ERROR: 502,
+  UPSTREAM_UNREACHABLE: 502,
   INVALID_MANIFEST: 502,
   INVALID_MPD: 502,
   MANIFEST_TOO_LARGE: 502,
@@ -166,6 +192,18 @@ app.get(
 
 app.use('/api', (req, res) => {
   res.status(404).json({ error: { code: 'NOT_FOUND', message: `Okänd API-route: ${req.path}` } });
+});
+
+// A single stray rejection anywhere in the analysis chain would otherwise take the
+// whole process down and drop every in-flight request with it. Log and keep serving;
+// an uncaught *exception* leaves unknown state, so that one still exits - but
+// deliberately, after the reason has been written somewhere.
+process.on('unhandledRejection', (reason) => {
+  console.error('Ohanterad promise-rejection:', reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error('Ohanterat undantag - avslutar:', err);
+  process.exit(1);
 });
 
 app.listen(PORT, HOST, async () => {

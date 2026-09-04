@@ -2,13 +2,14 @@
   "name": "audio-analyzer",
   "version": "1.0.0",
   "private": true,
-  "description": "Lokalt verktyg för att analysera ljudströmmar - manifest, kodekar, buffert, latens, bitrate och ID3-metadata",
+  "description": "Verktyg för att analysera ljudströmmar - manifest, kodekar, buffert, latens, bitrate och ID3-metadata",
   "type": "module",
   "engines": {
-    "node": ">=18.17"
+    "node": ">=20"
   },
   "scripts": {
-    "start": "node server/index.js"
+    "start": "node server/index.js",
+    "test": "node --test"
   },
   "repository": {
     "type": "git",
@@ -21,7 +22,11 @@
     "express-rate-limit": "^8.6.2",
     "fast-xml-parser": "^4.5.7",
     "geoip-lite": "^2.0.3",
+    "helmet": "^8.3.0",
     "ipaddr.js": "^1.9.1",
     "undici": "^6.28.0"
+  },
+  "overrides": {
+    "qs": "^6.16.0"
   }
 }

@@ -19,6 +19,16 @@ function resolveUrl(baseUrl, uri) {
 }
 
 /**
+ * Parses a numeric tag value, or null when it isn't a number.
+ * Not `Number(x) || null`: that maps a legitimate 0 to null, and
+ * `#EXT-X-MEDIA-SEQUENCE:0` (every stream that has just started) is exactly that.
+ */
+function num(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+/**
  * Parses an attribute list of the form KEY=VALUE,KEY2="VALUE 2",KEY3=1920x1080
  * as found after e.g. #EXT-X-STREAM-INF:. Must handle quoted
  * strings where commas should NOT be interpreted as a separator (e.g. CODECS).
@@ -68,7 +78,7 @@ function parseMasterPlaylist(lines, baseUrl) {
     const line = lines[i];
 
     if (line.startsWith('#EXT-X-VERSION:')) {
-      version = Number(line.slice('#EXT-X-VERSION:'.length)) || null;
+      version = num(line.slice('#EXT-X-VERSION:'.length));
       continue;
     }
 
@@ -142,11 +152,11 @@ function parseMediaPlaylist(lines, baseUrl) {
 
   for (const line of lines) {
     if (line.startsWith('#EXT-X-VERSION:')) {
-      version = Number(line.slice('#EXT-X-VERSION:'.length)) || null;
+      version = num(line.slice('#EXT-X-VERSION:'.length));
     } else if (line.startsWith('#EXT-X-TARGETDURATION:')) {
-      targetDuration = Number(line.slice('#EXT-X-TARGETDURATION:'.length)) || null;
+      targetDuration = num(line.slice('#EXT-X-TARGETDURATION:'.length));
     } else if (line.startsWith('#EXT-X-MEDIA-SEQUENCE:')) {
-      mediaSequence = Number(line.slice('#EXT-X-MEDIA-SEQUENCE:'.length)) || null;
+      mediaSequence = num(line.slice('#EXT-X-MEDIA-SEQUENCE:'.length));
     } else if (line.startsWith('#EXT-X-PLAYLIST-TYPE:')) {
       playlistType = line.slice('#EXT-X-PLAYLIST-TYPE:'.length).trim();
     } else if (line.startsWith('#EXT-X-ENDLIST')) {
@@ -194,8 +204,7 @@ function parseMediaPlaylist(lines, baseUrl) {
     } else if (line.startsWith('#EXT-X-DISCONTINUITY-SEQUENCE:')) {
       // Must be tested BEFORE '#EXT-X-DISCONTINUITY' below - otherwise
       // the generic prefix check would incorrectly match this longer tag too.
-      discontinuitySequence = Number(line.slice('#EXT-X-DISCONTINUITY-SEQUENCE:'.length));
-      if (Number.isNaN(discontinuitySequence)) discontinuitySequence = null;
+      discontinuitySequence = num(line.slice('#EXT-X-DISCONTINUITY-SEQUENCE:'.length));
     } else if (line.startsWith('#EXT-X-START:')) {
       const attrs = parseAttributeList(line.slice('#EXT-X-START:'.length));
       startInfo = {
@@ -275,4 +284,4 @@ export function parseM3U8(text, baseUrl) {
   return { type: 'unknown', version: null };
 }
 
-export { resolveUrl, parseAttributeList };
+export { resolveUrl };

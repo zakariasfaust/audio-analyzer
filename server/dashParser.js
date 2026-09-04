@@ -28,6 +28,10 @@ const parser = new XMLParser({
   allowBooleanAttributes: true,
   parseTagValue: false, // keep BaseURL text etc. as verbatim strings
   parseAttributeValue: false, // we coerce numbers ourselves via numAttr()
+  // An MPD never needs custom DOCTYPE entities, and the bodies we parse come from
+  // servers we do not control - leaving expansion on keeps a classic entity-expansion
+  // amplification path open on an attacker-supplied document for no benefit.
+  processEntities: false,
   trimValues: true,
   removeNSPrefix: true, // <dash:MPD>, xsi:*, xlink:* -> bare names
   isArray: (name) => ALWAYS_ARRAY.has(name),
