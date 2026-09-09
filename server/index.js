@@ -15,6 +15,16 @@ import { AppError } from './errors.js';
 import { validateUrl } from './net.js';
 import { sampleStream, checkBinaryAvailable } from './ffmpeg.js';
 import { analyze } from './analyzer.js';
+import { fetchIcyMetadata } from './icecast.js';
+import { readMemorySnapshot, evaluateJobCapacity } from './resourceGuard.js';
+import {
+  MAX_CONCURRENT_JOBS,
+  REQUEST_DEADLINE_MS,
+  MEMORY_RATIO_THRESHOLD,
+  MAX_RSS_BYTES,
+  RATE_LIMIT_WINDOW_MS,
+  RATE_LIMIT_MAX,
+} from './config.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
@@ -23,18 +33,6 @@ const HOST = process.env.HOST || '127.0.0.1';
 // Number of reverse-proxy hops to trust for X-Forwarded-For. Off unless set - see
 // where it is applied below for why the default matters.
 const TRUST_PROXY = Number(process.env.TRUST_PROXY) || false;
-const RATE_LIMIT_WINDOW_MS = 5 * 60 * 1000;
-const RATE_LIMIT_MAX = 60; // per IP, per window - roomy for interactive use (a full Analyze is 2 calls), still a brake on scripted hammering
-// Hard ceiling on analyses running at once, across all callers. A per-IP rate
-// limit does nothing against many IPs; this is what actually bounds CPU, memory,
-// disk and bandwidth on the host no matter how the requests arrive.
-const MAX_CONCURRENT_JOBS = 3;
-// Absolute wall-clock ceiling per job. Every internal step already has its own
-// 10s timeout and a fully-degraded analyze (every step timing out in sequence)
-// still lands under this; it only catches a request that wedges anyway - and,
-// crucially, it aborts the work (in-flight fetches + ffmpeg/ffprobe) rather than
-// letting it keep consuming memory/bandwidth after we've stopped waiting.
-const REQUEST_DEADLINE_MS = 90_000;
 
 const app = express();
 // Trusting X-Forwarded-For means believing whoever sent it. Behind the deployment's
@@ -79,14 +77,39 @@ app.use(
 
 // Concurrency gate for the two endpoints that spawn ffprobe/ffmpeg. Rejects
 // immediately with 503 rather than queueing - a queue under abuse just defers
-// the pile-up. Legitimate use (the UI runs analyze then sample in sequence)
-// never approaches the limit.
+// the pile-up. Two independent reasons to reject: too many jobs already running
+// (a flat backstop against runaway fan-out), or too little memory headroom left
+// right now (the adaptive check - a stream log holds a slot for nearly its whole
+// lifetime, so "legitimate use never approaches the limit" stopped being true the
+// day continuous logging shipped; several concurrent logs is the expected case).
 let activeJobs = 0;
 function jobGuard(req, res, next) {
-  if (activeJobs >= MAX_CONCURRENT_JOBS) {
+  // Reading memory is a virtual-procfs read (or a no-op RSS lookup) - cheap, but
+  // pointless when the count alone would already reject, so it only runs when the
+  // count check would otherwise let the request through.
+  const memorySnapshot = activeJobs < MAX_CONCURRENT_JOBS ? readMemorySnapshot() : null;
+  const decision = evaluateJobCapacity({
+    activeJobs,
+    maxConcurrentJobs: MAX_CONCURRENT_JOBS,
+    memorySnapshot,
+    memoryRatioThreshold: MEMORY_RATIO_THRESHOLD,
+    maxRssBytes: MAX_RSS_BYTES,
+  });
+
+  if (!decision.allowed) {
+    // The one piece of observability the 2026-09-03 OOM postmortem flagged as
+    // wanted and never built: exactly why a request was turned away, on demand
+    // rather than as a constant-noise timer.
+    console.warn(`jobGuard: avvisade begäran (${decision.reason})`, decision.detail);
     res.set('Retry-After', '10');
     res.status(503).json({
-      error: { code: 'BUSY', message: 'Servern kör redan så många analyser den tar samtidigt. Försök igen om en liten stund.' },
+      error: {
+        code: 'BUSY',
+        message: 'Servern kör redan så många analyser den tar samtidigt. Försök igen om en liten stund.',
+        // Not read by the client - it only branches on the code above - but worth
+        // having in the response for anyone debugging with the network tab open.
+        details: { reason: decision.reason },
+      },
     });
     return;
   }
@@ -186,7 +209,27 @@ app.get(
   jobGuard,
   withRequestAbort(async (req, res, signal) => {
     const url = validateUrl(req.query.url);
-    res.json(await sampleStream(url, req.query.secs, { signal }));
+
+    // Icecast/SHOUTcast carry "now playing" in an in-stream ICY block, not in the
+    // audio. The sample is re-muxed to MPEG-TS by ffmpeg and the block does not
+    // survive that, so the stream log asks for it explicitly with ?icy=1. It is one
+    // extra cheap GET run alongside the recording, not after it, so it costs no
+    // wall-clock time and no second job slot.
+    const wantIcy = req.query.icy === '1';
+    const [sample, icy] = await Promise.all([
+      sampleStream(url, req.query.secs, { signal }),
+      // A missing title is not an error - plenty of stations send none. An abort
+      // still surfaces, because the recording running beside this rejects on it too.
+      wantIcy ? fetchIcyMetadata(url, { signal }).catch(() => null) : Promise.resolve(null),
+    ]);
+
+    if (icy) {
+      sample.station = {
+        nowPlaying: icy.streamTitle || null,
+        icyMetadataSupported: Boolean(icy.icyMetadataSupported),
+      };
+    }
+    res.json(sample);
   })
 );
 
@@ -208,6 +251,17 @@ process.on('uncaughtException', (err) => {
 
 app.listen(PORT, HOST, async () => {
   console.log(`Audio-analyzer körs på http://${HOST}:${PORT}`);
+
+  // Which memory source jobGuard actually resolved to is not obvious from the
+  // outside (Railway's cgroup version isn't documented anywhere), and it decides
+  // which of MEMORY_RATIO_THRESHOLD/MAX_RSS_BYTES is even in effect - worth
+  // knowing at a glance in the deploy log rather than inferred from behaviour.
+  const boot = readMemorySnapshot();
+  const memoryLine =
+    boot.source === 'rss'
+      ? `minneskälla=rss, gräns=${MAX_CONCURRENT_JOBS} jobb, RSS-tak=${Math.round(MAX_RSS_BYTES / 1024 / 1024)} MB`
+      : `minneskälla=${boot.source}, gräns=${MAX_CONCURRENT_JOBS} jobb, minneströskel=${Math.round(MEMORY_RATIO_THRESHOLD * 100)}%`;
+  console.log(`Resursvakt: ${memoryLine}`);
 
   const [hasFfmpeg, hasFfprobe] = await Promise.all([
     checkBinaryAvailable('ffmpeg'),

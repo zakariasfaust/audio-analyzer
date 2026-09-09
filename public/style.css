@@ -152,6 +152,12 @@ tr.variant-active {
   color: #b00020;
 }
 
+/* A local capacity limit, not a stream failure - deliberately not red, so it can
+   never be mistaken for "strömmen nere" in the log's status column. */
+.busy {
+  color: #b45309;
+}
+
 dl {
   display: grid;
   grid-template-columns: max-content 1fr;
@@ -197,4 +203,157 @@ dt[title], th[title], h2[title], h3[title] {
   cursor: help;
   text-decoration: underline dotted;
   text-underline-offset: 3px;
+}
+
+/* --- Stream log (rendered into #results by log.js) -------------------- */
+
+#log-btn {
+  padding: 0.4rem 1rem;
+}
+
+#log-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 0.5rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid #eee;
+  font-size: 0.85rem;
+  color: #555;
+}
+
+#log-controls input[type='number'] {
+  width: 4rem;
+  padding: 0.15rem 0.3rem;
+}
+
+#log-controls button {
+  font-size: 0.8rem;
+  padding: 0.15rem 0.5rem;
+}
+
+#log-controls button:disabled {
+  opacity: 0.5;
+}
+
+#log-stop-btn {
+  font-weight: bold;
+}
+
+#log-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 0.4rem;
+}
+
+#log-drift-help {
+  max-width: 46rem;
+  font-size: 0.85rem;
+}
+
+#log-error:empty {
+  display: none;
+}
+
+#log-chart {
+  width: 100%;
+  height: 200px;
+  border: 1px solid #ddd;
+}
+
+#chart-legend {
+  font-size: 0.8rem;
+  font-style: normal;
+}
+
+#chart-legend:empty {
+  display: none;
+}
+
+.swatch {
+  display: inline-block;
+  width: 0.7rem;
+  height: 0.7rem;
+  margin: 0 0.15rem 0 0.9rem;
+  vertical-align: baseline;
+  border: 1px solid #bbb;
+}
+
+#chart-legend .swatch:first-child {
+  margin-left: 0;
+}
+
+/* Kept in sync with CHART_COLORS in log.js - the canvas draws with the values there,
+   these squares label them. An inline style would be dropped by the CSP. */
+.swatch-lufs {
+  background: #0b6bcb;
+}
+
+.swatch-truepeak {
+  background: #c2410c;
+}
+
+.swatch-silence {
+  background: rgba(234, 179, 8, 0.45);
+}
+
+.swatch-outage {
+  background: rgba(176, 0, 32, 0.35);
+}
+
+#event-feed {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  font-size: 0.9rem;
+}
+
+#event-feed li {
+  padding: 0.15rem 0;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+.event-dot {
+  display: inline-block;
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 50%;
+  margin-right: 0.4rem;
+  background: #999;
+}
+
+.event-silence {
+  background: #eab308;
+}
+
+.event-outage {
+  background: #b00020;
+}
+
+.event-metadata-change {
+  background: #0b6bcb;
+}
+
+.event-format-change {
+  background: #7c3aed;
+}
+
+.event-clipping {
+  background: #c2410c;
+}
+
+.event-loudness-drift {
+  background: #0891b2;
+}
+
+.event-note {
+  background: #16a34a;
+}
+
+#log-warning p {
+  background: #fff8e1;
+  border: 1px solid #f0e0a0;
+  padding: 0.4rem 0.6rem;
+  font-style: normal;
 }

@@ -157,6 +157,182 @@ export async function runFfprobe(url, { signal } = {}) {
   return { raw: probeJson, audio: simplifyProbeResult(probeJson) };
 }
 
+// ---------------------------------------------------------------------------
+// Loudness: EBU R128 integrated loudness and true peak, plus silence detection.
+//
+// One extra ffmpeg pass over the sample file sampleStream() has already recorded,
+// run before that file is cleaned up. Deliberately a separate pass rather than
+// filters bolted onto the recording itself, so "the recording failed" and "the
+// measurement failed" stay two different answers.
+// ---------------------------------------------------------------------------
+
+// Anything quieter than this, for at least this long, counts as silence. -50 dB is
+// below the noise floor of a real broadcast chain but well above digital zero, so a
+// dead source still feeding hiss or encoder noise is caught too - which is the case
+// that matters, since a listener hears both as dead air.
+export const SILENCE_NOISE_DB = -50;
+// Deliberately short. The stream log stitches silence across consecutive recordings,
+// and a stretch that starts 0.6 s before a recording ends has to be reported for that
+// stitch to work - with the old 2 s minimum it was dropped, and a true 20 s silence
+// measured as 18. Short musical gaps still get reported now, but they are filtered by
+// total length where the user sets the threshold, not silently here.
+export const SILENCE_MIN_DURATION_SEC = 0.5;
+
+/**
+ * silencedetect writes one line per event and does not pair them up:
+ *
+ *   [Parsed_silencedetect_0 @ ...] silence_start: 2.023197
+ *   [Parsed_silencedetect_0 @ ...] silence_end: 5.023265 | silence_duration: 3.000068
+ *
+ * The two filters interleave unpredictably - the ebur128 summary can land between a
+ * start and its own end - so each pattern is matched globally over the whole string
+ * and the lists are paired by index, never by how close two lines happen to sit.
+ *
+ * A silence still running when the sample window ends has a start and no end. That
+ * is reported as endSec/durationSec = null rather than guessed at, because "still
+ * silent when we stopped listening" is a different fact from a measured length.
+ */
+export function parseSilenceDetect(stderr) {
+  const text = String(stderr || '');
+  const starts = [...text.matchAll(/silence_start:\s*(-?[\d.]+)/g)].map((m) => Number(m[1]));
+  const ends = [...text.matchAll(/silence_end:\s*(-?[\d.]+)\s*\|\s*silence_duration:\s*(-?[\d.]+)/g)].map((m) => ({
+    endSec: Number(m[1]),
+    durationSec: Number(m[2]),
+  }));
+
+  return starts.map((startSec, i) => ({
+    startSec,
+    endSec: i < ends.length ? ends[i].endSec : null,
+    durationSec: i < ends.length ? ends[i].durationSec : null,
+  }));
+}
+
+// The summary block, written once at EOF because of framelog=quiet:
+//
+//   [Parsed_ebur128_1 @ ...] Summary:
+//
+//     Integrated loudness:
+//       I:         -21.4 LUFS
+//     ...
+//     True peak:
+//       Peak:      -18.1 dBFS
+//
+// Only the two values this tool reports are pulled out. ebur128 prints the loudness
+// range too and there is no way to turn it off - it is ignored on purpose: LRA over a
+// few seconds says little, and the stream log graphs level and peak only.
+//
+// Each value is matched from the start of its own line, so the "True peak:" heading
+// cannot be mistaken for the "Peak:" value below it.
+const EBUR128_FIELD_PATTERNS = {
+  integratedLufs: /^[ \t]*I:[ \t]*(-?[\d.]+|-?inf|-?nan)[ \t]*LUFS/im,
+  truePeakDbfs: /^[ \t]*Peak:[ \t]*(-?[\d.]+|-?inf|-?nan)[ \t]*dBFS/im,
+};
+
+// "-inf" and "nan" are not numbers and must not reach JSON: JSON.stringify(-Infinity)
+// is null, so an unmapped -Infinity would arrive at the frontend indistinguishable
+// from "we never measured this". Mapped to null here on purpose - the -inf case is
+// kept separately as truePeakIsSilent below.
+function toFiniteNumber(raw) {
+  if (raw === null) return null;
+  if (raw === 'inf' || raw === '-inf' || raw === 'nan' || raw === '-nan') return null;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : null;
+}
+
+// Anchor on the filter's own log prefix rather than a bare "Summary:", which a
+// stream title or a metadata line echoed by ffmpeg could also contain.
+function findEbur128SummaryIndex(text) {
+  const tagged = text.match(/\[Parsed_ebur128[^\]]*\][ \t]*Summary:/);
+  return tagged ? tagged.index : text.indexOf('Summary:');
+}
+
+export function parseEbur128Summary(stderr) {
+  const text = String(stderr || '');
+  const summaryAt = findEbur128SummaryIndex(text);
+
+  if (summaryAt === -1) {
+    return {
+      available: false,
+      integratedLufs: null,
+      truePeakDbfs: null,
+      truePeakIsSilent: false,
+    };
+  }
+
+  const block = text.slice(summaryAt);
+  const raw = {};
+  for (const [field, pattern] of Object.entries(EBUR128_FIELD_PATTERNS)) {
+    const match = block.match(pattern);
+    raw[field] = match ? match[1].toLowerCase() : null;
+  }
+
+  return {
+    available: true,
+    integratedLufs: toFiniteNumber(raw.integratedLufs),
+    truePeakDbfs: toFiniteNumber(raw.truePeakDbfs),
+    // Digital silence reports "Peak: -inf dBFS". That is "no signal at all", not
+    // "not measured", and both are null above - so the difference is kept here.
+    truePeakIsSilent: raw.truePeakDbfs === '-inf',
+  };
+}
+
+/**
+ * Measures EBU R128 loudness and finds silent stretches in an already-recorded
+ * local file.
+ *
+ * Only ever point this at a file we wrote ourselves: the input is pinned to the
+ * `file` protocol, which is both what a local path needs and what stops a crafted
+ * recording from steering ffmpeg back out onto the network.
+ */
+export async function measureLoudness(filePath, { signal } = {}) {
+  const filterChain =
+    `silencedetect=noise=${SILENCE_NOISE_DB}dB:d=${SILENCE_MIN_DURATION_SEC},` +
+    'ebur128=peak=true:framelog=quiet';
+
+  const args = [
+    '-hide_banner',
+    '-nostats',
+    '-protocol_whitelist', 'file',
+    '-i', filePath,
+    // framelog=quiet is load-bearing: without it ebur128 logs a line every ~100 ms
+    // and only the closing summary is of any use to us.
+    '-af', filterChain,
+    '-f', 'null', // measure only; nothing is written back out
+    '-',
+  ];
+
+  // Every other ffprobe/ffmpeg call here runs quiet and reads JSON from stdout. This
+  // one must not: both filters report through av_log on *stderr* and have no JSON
+  // form at all, so the log level is left alone and stderr is what gets parsed.
+  const { code, stderr, timedOut } = await runChildProcess('ffmpeg', args, { timeoutMs: TIMEOUT_MS, signal });
+
+  if (timedOut) {
+    throw new FfmpegError(stderr, `Ljudnivåmätningen blev inte klar inom ${TIMEOUT_MS / 1000} sekunder.`);
+  }
+
+  const summary = parseEbur128Summary(stderr);
+  const silence = parseSilenceDetect(stderr);
+
+  // A partial result is still worth having: silence data without an ebur128 summary
+  // answers "was there dead air", which is the question this feature exists for.
+  // Only when neither filter said anything at all is this a failed measurement.
+  if (!summary.available && silence.length === 0) {
+    // Not the exit code: ffmpeg returns its errors negative, which Node surfaces on
+    // Windows as numbers like 4294967294 - noise in a sentence a user reads. The
+    // actual reason is ffmpeg's own stderr, which FfmpegError carries in details.
+    throw new FfmpegError(stderr, 'ffmpeg kunde inte mäta ljudnivån på det inspelade provet.');
+  }
+
+  return {
+    ...summary,
+    silence,
+    // Echoed back so the frontend can state the thresholds it is reporting against
+    // instead of the user having to take "silence" on faith.
+    noiseThresholdDb: SILENCE_NOISE_DB,
+    minSilenceDurationSec: SILENCE_MIN_DURATION_SEC,
+  };
+}
+
 /**
  * Records N seconds of the stream to a temporary file and analyzes it:
  * - measured bitrate = file size * 8 / actual playback duration
@@ -218,9 +394,16 @@ export async function sampleStream(url, requestedSeconds = 8, { signal } = {}) {
       tempFile,
     ];
 
-    const [probeRes, framesRes] = await Promise.all([
+    const [probeRes, framesRes, loudnessOutcome] = await Promise.all([
       runChildProcess('ffprobe', probeArgs, { signal }),
       runChildProcess('ffprobe', framesArgs, { signal }),
+      // Isolated on purpose: a failed loudness pass must not take the recording's
+      // own numbers (bitrate, container, ID3) down with it - the same split
+      // analyze() already uses for its per-step errors.
+      measureLoudness(tempFile, { signal }).then(
+        (value) => ({ ok: true, value }),
+        (err) => ({ ok: false, err })
+      ),
     ]);
 
     // A tool failure must not silently become a statement about the stream: without
@@ -248,6 +431,28 @@ export async function sampleStream(url, requestedSeconds = 8, { signal } = {}) {
       });
     }
 
+    // Reported next to the result rather than as a failure of the whole sample:
+    // loudness is one of several things this response carries, and the rest of it
+    // is still true when the measurement is the part that broke.
+    const errors = {};
+    let loudness = null;
+    if (loudnessOutcome.ok) {
+      loudness = loudnessOutcome.value;
+    } else if (signal?.aborted) {
+      // The two ffprobes usually finish first and carry an abort out of Promise.all
+      // on their own - but if the measurement is the last one still running, the
+      // abort would land here and be filed as "loudness failed". It is the opposite:
+      // the whole sample is moot, so it propagates (REQUEST_TIMEOUT or the client
+      // having gone away, whichever aborted the request).
+      throw loudnessOutcome.err;
+    } else {
+      errors.loudness = {
+        message: loudnessOutcome.err.message,
+        code: loudnessOutcome.err.code || 'UNKNOWN',
+        details: loudnessOutcome.err.details,
+      };
+    }
+
     const format = probeJson.format || {};
     const actualDurationSec = Number(format.duration) || secs;
     const fileSizeBytes = Number(format.size) || stat?.size || 0;
@@ -273,6 +478,12 @@ export async function sampleStream(url, requestedSeconds = 8, { signal } = {}) {
 
     return {
       requestedSeconds: secs,
+      // When this recording started, by the server's clock. The log maps silence
+      // offsets onto it, so it is the difference between "silent somewhere in this
+      // poll" and "silent from 10:03:14 to 10:03:37". Note this is when we started
+      // connecting: a live stream is inherently some seconds behind the broadcast,
+      // so these are the times we *heard* it, not the times it was transmitted.
+      recordedAt: new Date(recordStartMs).toISOString(),
       actualDurationSec,
       recordWallSec,
       connectBurstSec,
@@ -280,6 +491,7 @@ export async function sampleStream(url, requestedSeconds = 8, { signal } = {}) {
       fileSizeBytes,
       measuredBitrateKbps,
       streams: simplifyProbeResult(probeJson),
+      loudness,
       id3: {
         // `available: false` means "we looked and found none". `warnings` says
         // whether we were actually able to look - the frontend renders both.
@@ -287,6 +499,7 @@ export async function sampleStream(url, requestedSeconds = 8, { signal } = {}) {
         frames,
       },
       warnings,
+      errors,
     };
   } finally {
     await fs.unlink(tempFile).catch(() => {});

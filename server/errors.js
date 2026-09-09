@@ -106,9 +106,12 @@ export class FfprobeError extends AppError {
   }
 }
 
+// The message is overridable because ffmpeg is asked to do two different jobs -
+// record a sample, and measure its loudness - and "kunde inte spela in strömmen"
+// is an untrue explanation of a failure in the second one.
 export class FfmpegError extends AppError {
-  constructor(stderr) {
-    super('FFMPEG_FAILED', 'ffmpeg kunde inte spela in strömmen.', { stderr: stderr?.slice(0, 2000) });
+  constructor(stderr, message = 'ffmpeg kunde inte spela in strömmen.') {
+    super('FFMPEG_FAILED', message, { stderr: stderr?.slice(0, 2000) });
   }
 }
 

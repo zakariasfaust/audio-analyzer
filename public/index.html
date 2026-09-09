@@ -20,6 +20,7 @@
       required
     />
     <button type="submit" id="analyze-btn">Analysera</button>
+    <button type="button" id="log-btn" title="Följ strömmen över tid i stället för att ta en ögonblicksbild">Logga</button>
   </form>
 
   <details id="faq">
@@ -28,6 +29,10 @@
     <p>
       Audio analyzer hämtar och analyserar en ljudström: anslutning och CORS, ljudkodek,
       segment och buffert, latens, uppmätt bitrate, "nu spelas" och det råa manifestet.
+      Välj <strong>Analysera</strong> för en nulägesbild, eller <strong>Logga</strong> för att
+      i stället följa strömmens ljudnivå och tystnad över tid. Loggningen spelar in
+      15 sekunder i taget, om och om igen, och ritar upp resultatet allt eftersom.
+      Den lever i den här fliken — exportera om du vill spara den.
       Hämtningarna görs på servern (CDN:er skickar sällan CORS-headers) och ljudet
       inspekteras med <code>ffprobe</code>/<code>ffmpeg</code>. HLS (<code>.m3u8</code>),
       MPEG-DASH (<code>.mpd</code>) och Icecast/SHOUTcast/RSAS.
@@ -89,6 +94,8 @@
   </footer>
 
   <script src="terms.js"></script>
+  <script src="shared.js"></script>
   <script src="app.js"></script>
+  <script src="log.js"></script>
 </body>
 </html>

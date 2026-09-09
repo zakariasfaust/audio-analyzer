@@ -41,3 +41,44 @@ export const CHILD_SIGKILL_GRACE_MS = 3000;
 // Hard cap on captured stdout/stderr so a pathological input that makes ffprobe emit
 // a huge JSON (or ffmpeg spew to stderr) can't grow the string unbounded.
 export const MAX_CHILD_OUTPUT_BYTES = 24 * 1024 * 1024;
+
+// Hard ceiling on analyses running at once, across all callers. Raised from the
+// original 3 once the stream log started holding a slot for nearly its whole
+// lifetime (one /api/sample every ~15s, back to back) - a handful of concurrent
+// logs used to leave no room for even one more. 12 comfortably covers the target
+// of 6-10 concurrent logs plus a spare analysis, while still bounding runaway
+// fan-out (dozens of tabs at once). The live memory check below is the adaptive
+// half of this gate; this number is the static backstop, not the primary defence.
+export const MAX_CONCURRENT_JOBS = Number(process.env.MAX_CONCURRENT_JOBS) || 12;
+
+// Absolute wall-clock ceiling per job. Every internal step already has its own
+// 10s timeout and a fully-degraded analyze (every step timing out in sequence)
+// still lands under this; it only catches a request that wedges anyway - and,
+// crucially, it aborts the work (in-flight fetches + ffmpeg/ffprobe) rather than
+// letting it keep consuming memory/bandwidth after we've stopped waiting.
+export const REQUEST_DEADLINE_MS = Number(process.env.REQUEST_DEADLINE_MS) || 90_000;
+
+// Reject a new job once the container's cgroup memory usage reaches this fraction
+// of its limit. This is the number the OOM incident (2026-09-03, container killed
+// at ~900MB) should have been gated on from the start - a cgroup limit counts the
+// Node process *and* every ffmpeg/ffprobe child it has spawned, unlike RSS below.
+// 20% headroom below the kernel's own kill threshold accounts for the lag between
+// admitting a job and its children reaching their own peak memory.
+export const MEMORY_RATIO_THRESHOLD = Number(process.env.MEMORY_RATIO_THRESHOLD) || 0.8;
+
+// Fallback ceiling for when no cgroup is readable at all (local dev - Windows in
+// particular has no /sys/fs/cgroup). This reflects only the Node process's own
+// memory, never its spawned children, so it is deliberately generous: the 2026
+// incident was killed around 900MB container-wide; 450MB is half that, with the
+// geoip-lite baseline (~100MB) now opt-in rather than always paid.
+export const MAX_RSS_BYTES = Number(process.env.MAX_RSS_BYTES) || 450 * 1024 * 1024;
+
+// Per-IP request budget. Raised alongside MAX_CONCURRENT_JOBS: a single running
+// log makes ~20 requests per 5-minute window on its own (one poll every 15s), so
+// the old ceiling of 60 blocked as few as 3-4 concurrent logs from one browser
+// regardless of the concurrency gate above. 300 covers every one of the 12 job
+// slots being held by a single IP (~240) with room to spare, while still cutting
+// off a genuine rapid-fire script (which would blow through 300 in well under the
+// 5-minute window, unlike paced, legitimate polling).
+export const RATE_LIMIT_WINDOW_MS = 5 * 60 * 1000;
+export const RATE_LIMIT_MAX = Number(process.env.RATE_LIMIT_MAX) || 300;

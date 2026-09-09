@@ -7,6 +7,12 @@ connection/CORS, variants (HLS) / representations (DASH) / station metadata
 (Icecast), audio codec, segments and buffer, latency, measured bitrate,
 "now playing", and the raw manifest.
 
+Paste a URL and pick one of two things: **Analysera** for that snapshot, or
+**Logga** to follow the stream over time instead. Both render into the same
+place below the URL field. The log plots integrated loudness (LUFS) and true
+peak as they are measured and lists silence and outages as they happen; it runs
+entirely in the browser tab.
+
 The stream type is detected automatically from the response (Content-Type and
 `icy-*` headers, then a small body peek), so the same URL field takes any of them.
 
@@ -48,6 +54,11 @@ in a `.m3u8` URL, and click Analyze.
 | `HOST` | `127.0.0.1` | Bind address. The Docker image sets `0.0.0.0`. See [Security posture](#security-posture). |
 | `TRUST_PROXY` | unset (off) | Number of reverse-proxy hops to trust for `X-Forwarded-For`. Set it **only** when something really does sit in front, otherwise any caller can forge the header and walk past the per-IP rate limit. |
 | `ENABLE_IP_GEO` | unset (off) | Turns on the IP-to-city estimate. Costs ~105 MB of resident memory, because `geoip-lite` loads its whole database on import. |
+| `MAX_CONCURRENT_JOBS` | `12` | Global cap on analyses/samples running at once. See [Security posture](#security-posture). |
+| `RATE_LIMIT_MAX` | `300` | Per-IP request budget per 5-minute window on `/api/*`. |
+| `MEMORY_RATIO_THRESHOLD` | `0.8` | Reject a new job once cgroup memory usage reaches this fraction of the container's limit (Linux/Docker only). |
+| `MAX_RSS_BYTES` | `450 * 1024 * 1024` | Fallback memory ceiling (Node process RSS only) when no cgroup is readable, e.g. local dev. |
+| `REQUEST_DEADLINE_MS` | `90000` | Hard wall-clock ceiling per request; aborts in-flight work past this. |
 
 ## Testing
 
@@ -91,8 +102,41 @@ stop. Anything that would need a real stream is left to manual verification:
 - **ID3/"Now playing" is best-effort** - requires the stream to actually
   carry timed metadata in the segments. Many streams don't, in which case
   "No ID3 metadata found" is shown - that's expected, not an error.
+- **The stream log records back to back.** Each cycle records 15 seconds - the
+  server's hard cap - and the next recording starts as soon as the previous cycle
+  finishes, so the only unheard time is the moment it takes to reconnect. Silence
+  is timestamped against the server's own recording clock (`recordedAt`) and
+  stitched across recording boundaries, so a stretch of dead air split over two
+  recordings is reported once, with real start and end times, accurate to about a
+  second. That accuracy is why `SILENCE_MIN_DURATION_SEC` is 0.5 s: a fragment
+  shorter than the detector's minimum is never reported at all, and at the old 2 s
+  a 20-second silence straddling a boundary measured as 18 - or vanished. Two
+  stretches are only joined across the reconnect gap; a gap *inside* one recording
+  means audio was actually heard and is never bridged.
+- **Silence and outage are different findings** and are listed separately. Silence
+  means the stream answered and the audio arrived but was quiet - the broadcast
+  lost its content while the server kept working. Outage means the request itself
+  failed. Silence means audio below -50 dB for at least 2 seconds; a stream can be
+  inaudibly quiet without crossing that line, and true digital silence reports a
+  true peak of -inf, shown as "no signal at all" rather than as a missing value.
+- **The log lives in the browser tab.** No database, no server-side scheduler, no
+  account. It is mirrored to `localStorage` so a reload can offer to restore it
+  (never silently), warns before you close an unexported log, and nags after 24
+  hours - but the only durable copy is the JSON or CSV you export.
+- **LRA (loudness range) is not measured.** It is only meaningful over long,
+  varied material, and `ebur128` prints it whether we ask or not - so it is
+  parsed out and ignored rather than displayed as a number that would not mean
+  what it looks like.
+- **Loudness drift logging is off by default.** Most streams sit outside any given
+  target most of the time, so flagging every deviation buries the events that
+  matter. Switch it on and set the target in LUFS and the tolerance in LU (the
+  same scale, used for differences: 1 LU = 1 dB).
+- **"Now playing" comes from two different places.** HLS and DASH may carry ID3
+  frames in the segments; Icecast/SHOUTcast keep the title in an in-stream ICY
+  block that the recorded audio does not carry at all, so the log asks for it
+  separately with `/api/sample?icy=1`. Plenty of streams send neither.
 - **Timeout** on all external HTTP calls and ffprobe runs is 10 seconds
-  (`TIMEOUT_MS` in `server/analyzer.js`).
+  (`TIMEOUT_MS` in `server/config.js`).
 - **IP-based geo estimate** on the network path card is **off by default**. The
   bundled `geoip-lite` database is offline (no external calls) but costs ~105 MB of
   resident memory the moment it is imported, for a lookup that is well-known to be
@@ -108,12 +152,18 @@ exception. What is in place, and where it stops:
 - **No login.** Anyone who can reach the URL can use it. A TLS certificate publishes
   the hostname in public Certificate Transparency logs the moment it's issued.
 - **Per-IP rate limit** on `/api/*` - `RATE_LIMIT_MAX` / `RATE_LIMIT_WINDOW_MS`
-  in `server/index.js` (60 requests per 5 minutes). It keys on `X-Forwarded-For`
+  in `server/config.js` (300 requests per 5 minutes; a single running stream log
+  makes ~20 of those on its own, polling every 15s). It keys on `X-Forwarded-For`
   only when `TRUST_PROXY` is set; without a proxy in front, trusting that header
   would let any caller forge a fresh IP per request and bypass the limit entirely.
-- **Global concurrency cap** - `MAX_CONCURRENT_JOBS` in `server/index.js` (3).
+- **Global concurrency cap** - `MAX_CONCURRENT_JOBS` in `server/config.js` (12).
   The two endpoints that spawn `ffprobe`/`ffmpeg` reject with 503 past this,
-  regardless of source IP.
+  regardless of source IP. Backed by a live memory check (`server/resourceGuard.js`):
+  a job is also refused once the container's cgroup memory usage crosses
+  `MEMORY_RATIO_THRESHOLD` (80% of its limit) - or, when no cgroup is readable (local
+  dev), once the Node process's own RSS crosses `MAX_RSS_BYTES`. Both rejection
+  reasons return the same `BUSY` error to the client; the stream log treats a `BUSY`
+  response as neither a success nor a stream outage, and excludes it from both.
 - **SSRF guard** - `assertPublicHost` in `server/net.js` blocks outbound requests to
   `localhost`, private/link-local ranges, and cloud-metadata addresses. For `fetch`
   traffic (manifests, headers, segment probes) it's backed by an undici dispatcher

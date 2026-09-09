@@ -39,7 +39,7 @@ function loadApp() {
     console,
   });
 
-  for (const file of ['terms.js', 'app.js']) {
+  for (const file of ['terms.js', 'shared.js', 'app.js']) {
     vm.runInContext(fs.readFileSync(path.join(publicDir, file), 'utf8'), context, { filename: file });
   }
   return context;

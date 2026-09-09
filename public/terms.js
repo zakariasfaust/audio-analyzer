@@ -182,4 +182,27 @@ const STREAM_TERMS = {
     'Hur många sekunder som faktiskt spelades in för mätningen - kan bli kortare än begärt om strömmen hackade eller anslutningen bröts.',
   'connect-burst':
     'När en lyssnare ansluter skickar Icecast/SHOUTcast/RSAS direkt en klump redan buffrat ljud så uppspelningen kan starta snabbt, och strypar sedan till realtid. Verktyget spelar in strömmen så fort servern skickar och jämför inspelad speltid med väggklockstid — mellanskillnaden är den bufferten, dvs. ungefär hur långt efter sändningen en ny lyssnare börjar. Grov nedre gräns: anslutningstid, nätverksfart och eventuella reläservrar spär på osäkerheten, och "minst" betyder att hela provet rymdes i bufferten så den egentligen är större.',
+
+  // Loudness (EBU R128) and silence
+  loudness:
+    'Hur högt strömmen faktiskt låter, mätt enligt EBU R128 - branschstandarden för ljudnivå. Mätningen görs på samma inspelade ljudprov som bitraten, och letar samtidigt efter tystnad i ljudet.',
+  'integrated-lufs':
+    'Medelljudnivån över hela provet, viktad efter hur örat uppfattar ljud (LUFS). Riktvärden: -23 LUFS för broadcast/TV enligt EBU R128, och -14 till -16 LUFS för streamingtjänster som Spotify och YouTube. Ligger kanalen långt under sitt riktvärde låter den svag bredvid andra kanaler, och tvärtom.',
+  'true-peak':
+    'Den högsta signaltoppen, mätt även mellan samplingspunkterna (dBTP) så att toppar som uppstår först vid uppspelning räknas med. Över -1 dBTP riskerar ljudet att klippa och låta distat i vissa spelare. "-∞" betyder att provet var helt digitalt tyst - ingen signal alls.',
+  'tystnad-start': 'När tystnaden började, räknat från början av ljudprovet.',
+  'tystnad-slut':
+    'När tystnaden slutade, räknat från början av ljudprovet. Står det att den pågick vid inspelningens slut var strömmen fortfarande tyst när provet tog slut, och då är längden en nedre gräns snarare än en mätning.',
+  'tystnad-langd':
+    'Hur länge tystnaden varade. Korta pauser mellan låtar är normalt; längre tystnad kan betyda att sändningen tappat sin källa - dead air - även när strömmen i sig fortfarande fungerar.',
+
+  // Stream log
+  'tystnad-avbrott':
+    'Tystnad och avbrott är två olika fel och listas därför var för sig. "Tystnad" betyder att strömmen svarade och ljudet gick att spela in, men var tyst - sändningen har tappat sitt innehåll medan servern fortfarande fungerar. "Strömmen nere" betyder att anropet misslyckades helt: ingen ljuddata kom fram. Tystnad kortare än den inställda gränsen visas ingenstans - varken här, i sammanfattningen, i grafen eller bland händelserna.',
+  'status-strom':
+    'Om hämtningen av ljudet lyckades - alltså om strömmen svarade och gick att spela in. Det säger ingenting om att ljudet lät bra: femton sekunders total tystnad ger också OK. Misslyckas hämtningen räknas det som ett avbrott ("strömmen nere") - utom när servern själv var för upptagen för att ens försöka, vilket visas separat och inte räknas som att strömmen var nere.',
+  'tystnad-typ':
+    'Tystnad = strömmen fungerade men lät ingenting. Strömmen nere = anropet misslyckades, t.ex. att servern inte svarade eller svarade med ett fel.',
+  'medel-lufs':
+    'Medelvärdet av ljudnivån i varje enskild mätning. Det är inte samma sak som en integrerad ljudnivå för hela sändningen - EBU R128 viktar och gallrar över hela materialet, vilket inte går att räkna fram i efterhand ur medelvärden. Använd det som en trend, inte som ett exakt mått.',
 };
