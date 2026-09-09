@@ -79,6 +79,8 @@ const EVENT_LABELS = {
   outage: 'Strömmen nere',
 };
 
+const ALL_EVENT_TYPES = Object.keys(EVENT_LABELS);
+
 // ---------------------------------------------------------------------
 // State
 // ---------------------------------------------------------------------
@@ -90,6 +92,10 @@ let logDirty = false;
 let logPollTimer = null;
 let logAbort = null;
 let logSession = null;
+// Which event types show in the feed - all of them by default. A Set, not an
+// array: membership checks on every event while rendering, and toggling one type
+// on/off is a single add/delete rather than a filter+rebuild.
+let eventTypeFilter = new Set(ALL_EVENT_TYPES);
 let logShellBuilt = false;
 let warningDismissed = false;
 
@@ -334,6 +340,15 @@ function consecutiveNoConnectionCount(entries) {
 
 function allGaps(entries, nowMs = Date.now()) {
   return [...mergeSilences(entries), ...deriveOutages(entries, nowMs)].sort((a, b) => a.startMs - b.startMs);
+}
+
+// Which of the merged, sorted events to actually show - kept separate from
+// renderEvents() so the filtering itself is testable without a DOM. `visibleTypes`
+// is a Set of event `type` strings (see eventTypeFilter); an event whose type isn't
+// in it is hidden, nothing else changes (order, gap events, notes all pass through
+// unchanged when their type is selected).
+function filterEvents(events, visibleTypes) {
+  return (events || []).filter((event) => visibleTypes.has(event.type));
 }
 
 function filterGaps(gaps, minSec) {
@@ -583,6 +598,29 @@ function renderSilenceList(visible) {
     </section>`;
 }
 
+// One checkbox per event type, plus two shortcuts. Rebuilt every cycle along with
+// the list itself - its checked state is always rendered *from* eventTypeFilter
+// (the source of truth), never read back out of the DOM, so a full innerHTML
+// rebuild every 15s can't desync it. The change/click listeners that keep
+// eventTypeFilter itself up to date are wired once in buildShell(), delegated onto
+// #log-events (a stable container that survives this rebuild) - the same pattern
+// the copy button on #results already uses for the same reason.
+function renderEventFilter() {
+  const boxes = ALL_EVENT_TYPES.map((type) => {
+    const checked = eventTypeFilter.has(type) ? ' checked' : '';
+    return `<label class="event-filter-label">
+      <input type="checkbox" class="event-filter" data-type="${esc(type)}"${checked} />
+      <span class="event-dot event-${esc(type)}"></span>${esc(EVENT_LABELS[type])}
+    </label>`;
+  }).join('');
+
+  return `<p id="event-filter-row" class="note">
+    Visa: ${boxes}
+    <button type="button" id="event-filter-all">Alla</button>
+    <button type="button" id="event-filter-none">Inga</button>
+  </p>`;
+}
+
 function renderEvents(gaps) {
   const container = el('log-events');
   if (!container) return;
@@ -594,22 +632,32 @@ function renderEvents(gaps) {
   }));
   const all = [...logEvents, ...gapEvents].sort((a, b) => Date.parse(b.t) - Date.parse(a.t));
 
+  // Nothing has happened at all yet - hide the whole section, filter controls
+  // included, rather than show them with nothing to filter (matches the rest of
+  // the log: a section with nothing to report doesn't render placeholder text).
   if (!all.length) {
     container.innerHTML = '';
     return;
   }
 
-  const items = all
-    .slice(0, MAX_TABLE_ROWS)
-    .map(
-      (event) =>
-        `<li><span class="event-dot event-${esc(event.type)}"></span>
-          <span class="mono">${fmtClock(event.t)}</span>
-          <strong>${esc(EVENT_LABELS[event.type] || event.type)}</strong> ${esc(event.text)}</li>`
-    )
-    .join('');
+  const filtered = filterEvents(all, eventTypeFilter);
 
-  container.innerHTML = `<section><h2>Händelser</h2><ul id="event-feed">${items}</ul></section>`;
+  // Unlike the "nothing has happened yet" case above, this is the user's own doing
+  // (they narrowed the filter to types that haven't occurred) - silently showing an
+  // empty list here would look like a bug, not a choice, so it gets a note.
+  const body = filtered.length
+    ? `<ul id="event-feed">${filtered
+        .slice(0, MAX_TABLE_ROWS)
+        .map(
+          (event) =>
+            `<li><span class="event-dot event-${esc(event.type)}"></span>
+              <span class="mono">${fmtClock(event.t)}</span>
+              <strong>${esc(EVENT_LABELS[event.type] || event.type)}</strong> ${esc(event.text)}</li>`
+        )
+        .join('')}</ul>`
+    : `<p class="note">Inga händelser matchar de valda filtren.</p>`;
+
+  container.innerHTML = `<section><h2>Händelser</h2>${renderEventFilter()}${body}</section>`;
 }
 
 function renderTable() {
@@ -941,6 +989,27 @@ function buildShell(resultsEl) {
   el('log-stop-btn')?.addEventListener('click', () => stopStreamLog());
   el('log-silence-min')?.addEventListener('change', renderAll);
 
+  // Delegated onto #log-events itself, not the checkboxes/buttons inside it: those
+  // are destroyed and recreated every render (renderEvents() rebuilds the whole
+  // section from eventTypeFilter each cycle), but the container div is the same
+  // stable node buildShell() created here, so listeners attached to it survive.
+  el('log-events')?.addEventListener('change', (event) => {
+    const box = event.target.closest('.event-filter');
+    if (!box) return;
+    if (box.checked) eventTypeFilter.add(box.dataset.type);
+    else eventTypeFilter.delete(box.dataset.type);
+    renderAll();
+  });
+  el('log-events')?.addEventListener('click', (event) => {
+    if (event.target.closest('#event-filter-all')) {
+      eventTypeFilter = new Set(ALL_EVENT_TYPES);
+      renderAll();
+    } else if (event.target.closest('#event-filter-none')) {
+      eventTypeFilter = new Set();
+      renderAll();
+    }
+  });
+
   const toggle = el('log-drift-toggle');
   toggle?.addEventListener('change', () => {
     const fields = el('log-drift-fields');
@@ -1157,6 +1226,7 @@ async function startStreamLog(targetUrl, { statusEl, resultsEl } = {}) {
   logEvents = [];
   logDirty = false;
   warningDismissed = false;
+  eventTypeFilter = new Set(ALL_EVENT_TYPES);
   logShellBuilt = false;
   clearPersisted();
 

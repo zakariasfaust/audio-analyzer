@@ -317,6 +317,31 @@ dt[title], th[title], h2[title], h3[title] {
   background: rgba(176, 0, 32, 0.35);
 }
 
+#event-filter-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem;
+  margin: 0 0 0.5rem;
+}
+
+.event-filter-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.event-filter-label .event-dot {
+  margin: 0;
+}
+
+#event-filter-row button {
+  font-size: 0.8rem;
+  padding: 0.1rem 0.4rem;
+}
+
 #event-feed {
   list-style: none;
   padding: 0;

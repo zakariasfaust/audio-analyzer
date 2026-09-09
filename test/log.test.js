@@ -492,6 +492,52 @@ test('derivePointEvents says nothing about a failed poll', () => {
 });
 
 // ---------------------------------------------------------------------------
+// filterEvents - backs the "Visa: <checkboxes>" row in the events feed
+// ---------------------------------------------------------------------------
+
+test('filterEvents keeps only the selected types, in whatever combination', () => {
+  const events = [
+    { type: 'clipping', t: iso(0), text: 'a' },
+    { type: 'note', t: iso(1), text: 'b' },
+    { type: 'metadata-change', t: iso(2), text: 'c' },
+  ];
+
+  // Exactly the case from the request: clipping + notes, nothing else.
+  const both = log.filterEvents(events, new Set(['clipping', 'note']));
+  assert.equal(both.length, 2);
+  assert.ok(both.every((e) => e.type === 'clipping' || e.type === 'note'));
+
+  const onlyClipping = log.filterEvents(events, new Set(['clipping']));
+  assert.equal(onlyClipping.length, 1);
+  assert.equal(onlyClipping[0].type, 'clipping');
+});
+
+test('filterEvents returns nothing when no types are selected, and everything when all are', () => {
+  const events = [{ type: 'clipping', t: iso(0), text: 'a' }, { type: 'note', t: iso(1), text: 'b' }];
+
+  assert.equal(log.filterEvents(events, new Set()).length, 0);
+  assert.equal(log.filterEvents(events, new Set(['clipping', 'note'])).length, 2);
+});
+
+test('filterEvents does not reorder or otherwise touch the events it keeps', () => {
+  const events = [
+    { type: 'clipping', t: iso(0), text: 'first' },
+    { type: 'note', t: iso(1), text: 'second' },
+    { type: 'clipping', t: iso(2), text: 'third' },
+  ];
+
+  const kept = log.filterEvents(events, new Set(['clipping']));
+  assert.equal(kept.length, 2);
+  assert.equal(kept[0].text, 'first');
+  assert.equal(kept[1].text, 'third');
+});
+
+test('filterEvents handles an empty or missing event list', () => {
+  assert.equal(log.filterEvents([], new Set(['clipping'])).length, 0);
+  assert.equal(log.filterEvents(null, new Set(['clipping'])).length, 0);
+});
+
+// ---------------------------------------------------------------------------
 // summarize / warning
 // ---------------------------------------------------------------------------
 
