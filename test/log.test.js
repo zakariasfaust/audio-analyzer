@@ -613,7 +613,7 @@ test('summarize keeps session length keyed on every attempt, busy included', () 
 test('lastMeasuredEntry skips trailing busy/failed polls to find what was last actually heard', () => {
   // appendEntry uses this as `prev` for derivePointEvents - comparing a
   // metadata-change against a failed/busy entry's always-null nowPlaying would
-  // otherwise fire a spurious "spårbyte" event purely because the stream recovered,
+  // otherwise fire a spurious "metadataförändring" event purely because the stream recovered,
   // not because the title changed.
   const entries = [entryAt(0), failedAt(15), busyAt(30)];
 

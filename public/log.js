@@ -70,7 +70,7 @@ const GAP_LABELS = {
 };
 
 const EVENT_LABELS = {
-  'metadata-change': 'Spårbyte',
+  'metadata-change': 'Metadataförändring',
   'format-change': 'Formatändring',
   clipping: 'Klippning',
   'loudness-drift': 'Nivåavvikelse',
