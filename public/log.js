@@ -862,7 +862,7 @@ function buildShell(resultsEl) {
       <p id="log-error"></p>
       <div id="log-summary"></div>
       <section id="sec-log-chart">
-        <h2>Ljudnivå över tid</h2>
+        <h2>Ljudnivå</h2>
         <canvas id="log-chart" height="200"></canvas>
         <p class="note" id="chart-legend"></p>
       </section>
