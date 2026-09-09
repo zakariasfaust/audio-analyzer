@@ -74,6 +74,24 @@
     </details>
 
     <details>
+      <summary>Hur fungerar loggningen?</summary>
+      <p>
+        Loggningen spelar in 15 sekunder av ljudet, mäter ljudnivå (LUFS, True Peak)
+        och tystnad i det provet, och startar sedan genast nästa 15-sekundersinspelning
+        — utan paus emellan. Mätningen sker alltså <strong>löpande, i praktiken hela
+        tiden</strong>, inte bara som enstaka stickprov med jämna mellanrum. Det är
+        också därför en tystnad som sträcker sig över gränsen mellan två inspelningar
+        ändå fångas i sin helhet, med korrekt start- och sluttid — verktyget syr ihop
+        tystnaden från de båda inspelningarna.
+      </p>
+      <p>
+        Loggen lever bara i den här webbläsarfliken. Stänger du fliken utan att
+        exportera (JSON eller CSV) försvinner den. Loggningen går inte att pausa —
+        bara stoppa — och klickar du Logga igen börjar en helt ny logg från noll.
+      </p>
+    </details>
+
+    <details>
       <summary>Varför misslyckas analysen ibland?</summary>
       <p>
         Vanliga orsaker: geoblockering (svar 403, ofta med tom kropp), DRM-skyddad DASH
