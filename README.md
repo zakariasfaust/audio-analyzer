@@ -46,6 +46,22 @@ The server binds to `127.0.0.1` by default (not `0.0.0.0`) and listens on
 port `8877` by default. Open `http://127.0.0.1:8877/` in your browser, paste
 in a `.m3u8` URL, and click Analyze.
 
+### Running with Docker
+
+The bundled [`Dockerfile`](Dockerfile) is what the production deployment actually
+builds from - `node:24-alpine` plus `ffmpeg`, running as the non-root `node` user.
+
+```bash
+docker build -t audio-analyzer .
+docker run --rm -p 8877:8877 audio-analyzer
+```
+
+Unlike the bare `npm start` default, the image sets `HOST=0.0.0.0` (so the
+container is reachable from outside itself) and `TRUST_PROXY=1` (correct behind
+a reverse proxy; see the `TRUST_PROXY` note below before using this image
+without one in front of it). The image also ships a `HEALTHCHECK` that polls
+the app's own root path every 30s.
+
 ### Environment variables
 
 | Variable | Default | Meaning |
@@ -69,7 +85,11 @@ npm test        # node --test, no network, no ffmpeg needed
 The suite covers the parsers and every pure computation (segment stats, latency,
 DASH segment-URL generation), plus the frontend's escaping rules - including a
 regression test for a `javascript:` station homepage, which `esc()` alone did not
-stop. Anything that would need a real stream is left to manual verification:
+stop. `test/index.test.js` runs the real Express app as a child process and hits
+it with plain `fetch()` - request validation, the SSRF guard, and `jobGuard`'s
+concurrency limit, all exercised end to end rather than only unit-tested in
+isolation; still offline-safe, no real stream is ever reachable in it. Anything
+that needs a real stream is left to manual verification:
 
 1. `npm start`, open the page, analyze a known HLS `.m3u8` URL, a known
    DASH `.mpd` URL, and a public Icecast/radio stream URL - each should render
@@ -184,8 +204,17 @@ exception. What is in place, and where it stops:
   rest of helmet's defaults. The page renders remote-controlled strings, so every URL
   that becomes a link is scheme-checked first; escaping alone does not stop
   `javascript:`.
-- **The container** runs as the non-root `node` user and is built with `npm ci`, so
-  the deployed image gets exactly the versions in `package-lock.json`.
+- **The container** runs as the non-root `node` user, is built with `npm ci` (so the
+  deployed image gets exactly the versions in `package-lock.json`), and ships a
+  `HEALTHCHECK` that polls the app's own root path - so a process that's running but
+  wedged doesn't look "healthy" to Docker forever.
+- **Dependency advisories are reviewed, not just counted.** `npm audit` currently
+  reports one moderate finding, in `fast-xml-parser`'s `XMLBuilder` (unescaped-delimiter
+  injection in generated XML). This app only ever imports `XMLParser` (`server/dashParser.js`,
+  to read DASH manifests) and never `XMLBuilder` - the vulnerable code path is not
+  reachable through this app's usage. Left at the current major version rather than
+  forcing a breaking upgrade for an unreachable finding; revisit at the next routine
+  dependency bump.
 
 ## License
 

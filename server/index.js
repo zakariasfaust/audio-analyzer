@@ -18,6 +18,7 @@ import { analyze } from './analyzer.js';
 import { fetchIcyMetadata } from './icecast.js';
 import { readMemorySnapshot, evaluateJobCapacity } from './resourceGuard.js';
 import {
+  envNumber,
   MAX_CONCURRENT_JOBS,
   REQUEST_DEADLINE_MS,
   MEMORY_RATIO_THRESHOLD,
@@ -28,11 +29,14 @@ import {
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
-const PORT = Number(process.env.PORT) || 8877;
+// envNumber, not `Number(x) || default`: the latter treats an explicit "0" as unset,
+// which would silently ignore PORT=0 - the standard way to ask the OS for a free
+// ephemeral port (used by test/index.test.js so it never collides with anything).
+const PORT = envNumber('PORT', 8877);
 const HOST = process.env.HOST || '127.0.0.1';
 // Number of reverse-proxy hops to trust for X-Forwarded-For. Off unless set - see
 // where it is applied below for why the default matters.
-const TRUST_PROXY = Number(process.env.TRUST_PROXY) || false;
+const TRUST_PROXY = envNumber('TRUST_PROXY', false);
 
 const app = express();
 // Trusting X-Forwarded-For means believing whoever sent it. Behind the deployment's
@@ -131,6 +135,7 @@ function jobGuard(req, res, next) {
 // -----------------------------------------------------------------------
 
 const STATUS_BY_CODE = {
+  NOT_FOUND: 404,
   VALIDATION_ERROR: 400,
   HOST_BLOCKED: 400,
   TIMEOUT: 504,
@@ -234,7 +239,9 @@ app.get(
 );
 
 app.use('/api', (req, res) => {
-  res.status(404).json({ error: { code: 'NOT_FOUND', message: `Okänd API-route: ${req.path}` } });
+  // Through sendError like every other error response, rather than a hand-built
+  // envelope - same {error:{code,message}} shape, one place that decides it.
+  sendError(res, new AppError('NOT_FOUND', `Okänd API-route: ${req.path}`));
 });
 
 // A single stray rejection anywhere in the analysis chain would otherwise take the
@@ -249,8 +256,13 @@ process.on('uncaughtException', (err) => {
   process.exit(1);
 });
 
-app.listen(PORT, HOST, async () => {
-  console.log(`Audio-analyzer körs på http://${HOST}:${PORT}`);
+const server = app.listen(PORT, HOST, async () => {
+  // server.address().port, not the PORT constant: with PORT=0 (ask the OS for a
+  // free ephemeral port - what test/index.test.js does, to never collide with
+  // anything already running) PORT is still literally 0 here, and logging that
+  // instead of the port actually bound would be actively misleading.
+  const boundPort = server.address().port;
+  console.log(`Audio-analyzer körs på http://${HOST}:${boundPort}`);
 
   // Which memory source jobGuard actually resolved to is not obvious from the
   // outside (Railway's cgroup version isn't documented anywhere), and it decides

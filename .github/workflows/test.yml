@@ -1,0 +1,23 @@
+# Runs the test suite on every push and pull request. Node 22 - the floor set by
+# package.json's "engines" field, not the Node 24 the Docker image ships - so a
+# regression against the documented minimum is caught here rather than only in
+# production. Nothing in `npm test` (including test/index.test.js, which spawns
+# the real server as a child process) touches the network or needs ffmpeg/ffprobe
+# installed, so this workflow doesn't either.
+name: Test
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm test

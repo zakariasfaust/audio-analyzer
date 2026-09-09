@@ -3,6 +3,18 @@
 // to wait or how much memory/disk a single request can cost - the two things that
 // decide whether this survives being reachable from the internet.
 
+// Numeric env var with a fallback that survives an explicit "0" - the once-common
+// `Number(process.env.X) || fallback` idiom treats 0 as falsy, so a real, intentional
+// zero (PORT=0 to ask the OS for an ephemeral port, or an operator trying to disable
+// a limit) silently becomes the default instead of the value that was actually set.
+// Exported so server/index.js's own PORT/TRUST_PROXY parsing can use the same rule.
+export function envNumber(name, fallback) {
+  const raw = process.env[name];
+  if (raw === undefined || raw === '') return fallback;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : fallback;
+}
+
 export const TIMEOUT_MS = 10_000;
 
 export const USER_AGENT =
@@ -49,14 +61,14 @@ export const MAX_CHILD_OUTPUT_BYTES = 24 * 1024 * 1024;
 // of 6-10 concurrent logs plus a spare analysis, while still bounding runaway
 // fan-out (dozens of tabs at once). The live memory check below is the adaptive
 // half of this gate; this number is the static backstop, not the primary defence.
-export const MAX_CONCURRENT_JOBS = Number(process.env.MAX_CONCURRENT_JOBS) || 12;
+export const MAX_CONCURRENT_JOBS = envNumber('MAX_CONCURRENT_JOBS', 12);
 
 // Absolute wall-clock ceiling per job. Every internal step already has its own
 // 10s timeout and a fully-degraded analyze (every step timing out in sequence)
 // still lands under this; it only catches a request that wedges anyway - and,
 // crucially, it aborts the work (in-flight fetches + ffmpeg/ffprobe) rather than
 // letting it keep consuming memory/bandwidth after we've stopped waiting.
-export const REQUEST_DEADLINE_MS = Number(process.env.REQUEST_DEADLINE_MS) || 90_000;
+export const REQUEST_DEADLINE_MS = envNumber('REQUEST_DEADLINE_MS', 90_000);
 
 // Reject a new job once the container's cgroup memory usage reaches this fraction
 // of its limit. This is the number the OOM incident (2026-09-03, container killed
@@ -64,14 +76,14 @@ export const REQUEST_DEADLINE_MS = Number(process.env.REQUEST_DEADLINE_MS) || 90
 // Node process *and* every ffmpeg/ffprobe child it has spawned, unlike RSS below.
 // 20% headroom below the kernel's own kill threshold accounts for the lag between
 // admitting a job and its children reaching their own peak memory.
-export const MEMORY_RATIO_THRESHOLD = Number(process.env.MEMORY_RATIO_THRESHOLD) || 0.8;
+export const MEMORY_RATIO_THRESHOLD = envNumber('MEMORY_RATIO_THRESHOLD', 0.8);
 
 // Fallback ceiling for when no cgroup is readable at all (local dev - Windows in
 // particular has no /sys/fs/cgroup). This reflects only the Node process's own
 // memory, never its spawned children, so it is deliberately generous: the 2026
 // incident was killed around 900MB container-wide; 450MB is half that, with the
 // geoip-lite baseline (~100MB) now opt-in rather than always paid.
-export const MAX_RSS_BYTES = Number(process.env.MAX_RSS_BYTES) || 450 * 1024 * 1024;
+export const MAX_RSS_BYTES = envNumber('MAX_RSS_BYTES', 450 * 1024 * 1024);
 
 // Per-IP request budget. Raised alongside MAX_CONCURRENT_JOBS: a single running
 // log makes ~20 requests per 5-minute window on its own (one poll every 15s), so
@@ -81,4 +93,4 @@ export const MAX_RSS_BYTES = Number(process.env.MAX_RSS_BYTES) || 450 * 1024 * 1
 // off a genuine rapid-fire script (which would blow through 300 in well under the
 // 5-minute window, unlike paced, legitimate polling).
 export const RATE_LIMIT_WINDOW_MS = 5 * 60 * 1000;
-export const RATE_LIMIT_MAX = Number(process.env.RATE_LIMIT_MAX) || 300;
+export const RATE_LIMIT_MAX = envNumber('RATE_LIMIT_MAX', 300);

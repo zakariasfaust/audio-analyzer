@@ -30,5 +30,11 @@ ENV HOST=0.0.0.0
 ENV TRUST_PROXY=1
 EXPOSE 8877
 
+# A wedged-but-still-running process (this project's own OOM incident was
+# adjacent to exactly that shape) looks identical to a healthy one from outside
+# unless something actually probes it. Plain node:http against '/' - no curl/wget
+# added to the image just for this, see server/healthcheck.js.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 CMD ["node", "server/healthcheck.js"]
+
 # Appen startar ffmpeg mot URL:er den fått utifrån. Kör inte det som root.
 CMD ["npm", "start"]

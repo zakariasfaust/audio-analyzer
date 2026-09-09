@@ -1289,10 +1289,6 @@ function stopStreamLog() {
   if (logShellBuilt) renderAll();
 }
 
-function isStreamLogRunning() {
-  return logRunning;
-}
-
 if (typeof window !== 'undefined') {
   window.addEventListener?.('beforeunload', (event) => {
     if (!logEntries.length || !logDirty) return;
