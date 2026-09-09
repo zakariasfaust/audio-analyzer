@@ -28,10 +28,8 @@
     <p>
       Audio analyzer hämtar och analyserar en ljudström: anslutning och CORS, ljudkodek,
       segment och buffert, latens, uppmätt bitrate, "nu spelas" och det råa manifestet.
-      Välj <strong>Analysera</strong> för en nulägesbild, eller <strong>Logga</strong> för att
-      i stället följa strömmens ljudnivå och tystnad över tid. Loggningen spelar in
-      15 sekunder i taget, om och om igen, och ritar upp resultatet allt eftersom.
-      Den lever i den här fliken — exportera om du vill spara den.
+      Välj <strong>Analysera</strong> för en nulägesbild med alla metadata eller <strong>Logga</strong> för att
+      i stället följa strömmens ljudnivå över tid.
       Hämtningarna görs på servern (CDN:er skickar sällan CORS-headers) och ljudet
       inspekteras med <code>ffprobe</code>/<code>ffmpeg</code>. HLS (<code>.m3u8</code>),
       MPEG-DASH (<code>.mpd</code>) och Icecast/SHOUTcast/RSAS.
@@ -41,7 +39,7 @@
       <summary>Hur hittar jag HLS-adressen (<code>.m3u8</code>)?</summary>
       <p>
         Öppna sidan som spelar upp strömmen, öppna webbläsarens utvecklarverktyg (F12)
-        → fliken Nätverk, filtrera på <code>m3u8</code>. Starta uppspelningen — URL:en
+        → fliken Nätverk, filtrera på <code>m3u8</code>. Starta uppspelningen och URL:en
         som dyker upp (ofta <code>master.m3u8</code>, <code>playlist.m3u8</code> eller
         <code>chunklist.m3u8</code>) är den du klistrar in här. Ibland ligger den också
         direkt i sidkällan eller i en <code>&lt;video&gt;</code>/<code>&lt;source&gt;</code>-tagg.
@@ -54,7 +52,7 @@
         Samma sätt som för HLS: utvecklarverktyg → Nätverk, filtrera på <code>mpd</code>
         eller <code>dash</code>. URL:en slutar på <code>.mpd</code> (ofta
         <code>manifest.mpd</code> eller <code>Manifest.mpd</code>). DASH är vanligare
-        för TV/video än för radio.
+        för TV/video än för renodlade ljudströmmar.
       </p>
     </details>
 
@@ -64,11 +62,15 @@
         Radioströmmar är oftast en direkt URL till en "mount" — t.ex.
         <code>.../stream</code>, <code>.../live</code>, <code>.../128</code> eller något
         som slutar på <code>.mp3</code>/<code>.aac</code>. Hitta den genom att:
+      </p>
+      <p>
         (1) ladda ner stationens spellista (<code>.pls</code>- eller <code>.m3u</code>-fil,
-        ofta bakom en "lyssna i extern spelare"-länk) och öppna den i en textredigerare —
-        den innehåller den råa URL:en; (2) utvecklarverktyg → Nätverk, filtrera på
-        <code>media</code> eller <code>mp3</code> medan strömmen spelar; eller (3) titta
-        i stationens egen lista över direktlänkar.
+        ofta bakom en "lyssna i extern spelare"-länk) och öppna den i en textredigerare,
+        den innehåller den råa URL:en.
+      </p>
+      <p>
+        (2) utvecklarverktyg → Nätverk, filtrera på <code>media</code> eller <code>mp3</code> 
+        medan strömmen spelar; eller (3) titta i stationens egen lista över direktlänkar.
       </p>
     </details>
 
@@ -76,23 +78,20 @@
       <summary>Hur fungerar loggningen?</summary>
       <p>
         Loggningen spelar in 15 sekunder av ljudet, mäter ljudnivå (LUFS, True Peak)
-        och tystnad i det provet, och startar sedan genast nästa 15-sekundersinspelning
-        — utan paus emellan. Mätningen sker alltså <strong>löpande, i praktiken hela
-        tiden</strong>, inte bara som enstaka stickprov med jämna mellanrum. Det är
-        också därför en tystnad som sträcker sig över gränsen mellan två inspelningar
-        ändå fångas i sin helhet, med korrekt start- och sluttid — verktyget syr ihop
-        tystnaden från de båda inspelningarna.
+        och tystnad i det provet, och startar sedan genast nästa 15-sekundersinspelning.
+        Mätningen sker alltså löpande, inte bara som enstaka stickprov med jämna mellanrum. 
+        En tystnad som sträcker sig över gränsen mellan två inspelningar fångas i sin helhet,
+        med korrekt start och sluttid.
       </p>
       <p>
         Loggen lever bara i den här webbläsarfliken. Stänger du fliken utan att
-        exportera (JSON eller CSV) försvinner den. Loggningen går inte att pausa —
-        bara stoppa — och klickar du Logga igen börjar en helt ny logg från noll.
+        exportera (JSON eller CSV) försvinner den. Loggningen går inte pausa, utan enbart stoppa.
+        Klickar du Logga igen börjar en helt ny logg från noll.
       </p>
       <p>
         Går verktygets egen server ner mitt i en loggning (skiljt från att själva
-        ljudströmmen har problem) märks det tydligt och stoppar loggningen
-        automatiskt efter två misslyckade försök i rad — annars hade grafen sett ut
-        som om strömmen var nere, fast det bara är verktyget som inte går att nå.
+        ljudströmmen har problem) så stoppar loggningen automatiskt efter två misslyckade försök 
+        i rad.
       </p>
     </details>
 

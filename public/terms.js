@@ -7,20 +7,20 @@
 const STREAM_TERMS = {
   // Section headings (h2)
   anslutning:
-    'Visar om hämtningen av manifestet lyckades och vilka HTTP-headrar CDN:en svarade med, inklusive om CORS (Cross-Origin Resource Sharing) tillåts. Saknas CORS kan en vanlig webbläsare inte hämta strömmen direkt utan en proxy som den här backend:en.',
+    'Visar om hämtningen av manifestet lyckades och vilka HTTP-headrar CDN:en svarade med, inklusive om CORS (Cross-Origin Resource Sharing) tillåts. Saknas CORS kan en vanlig webbläsare inte hämta strömmen direkt utan en proxy',
   varianter:
-    'En HLS-master-playlist kan lista flera varianter av samma ström i olika kvaliteter, så spelaren kan välja den som passar tittarens uppkoppling. Radio har oftast bara en variant eftersom ljud kräver mycket mindre bandbredd än video.',
+    'En HLS-master-playlist kan lista flera varianter av samma ström i olika kvaliteter, så spelaren kan välja den som passar lyssnarens uppkoppling.',
   ljud: 'Teknisk information om själva ljudkodningen, hämtad genom att köra verktyget ffprobe mot strömmen.',
   segment:
     'HLS delar upp strömmen i korta segment som spelaren laddar ner ett i taget. Den här sektionen visar hur segmenten är uppbyggda och hur stort "fönster" av dem som är tillgängligt just nu.',
   latens:
     'Jämför tidsstämpeln i segmenten med systemklockan för att uppskatta hur långt efter den faktiska sändningen strömmen ligger. Kräver att manifestet innehåller PROGRAM-DATE-TIME-taggar.',
   bitrate:
-    'Den faktiska datamängden per sekund, uppmätt genom att hämta storleken på de senaste segmenten och jämföra med deras spellängd - jämförs med den bandbredd manifestet deklarerar.',
+    'Den faktiska datamängden per sekund, uppmätt genom att hämta storleken på de senaste segmenten och jämföra med deras spellängd och jämförs sedan med den bandbredd manifestet deklarerar.',
   id3:
-    'Vissa radioströmmar bäddar in metadata (t.ex. låttitel och artist) direkt i ljudsegmenten, med samma ID3-teknik som mp3-filer använder. Verktyget spelar in några sekunder av strömmen och letar efter sådan metadata - många strömmar saknar den helt.',
+    'Vissa ljudströmmar bäddar in metadata (t.ex. låttitel och artist) direkt i ljudsegmenten, med samma ID3-teknik som mp3-filer använder. Verktyget spelar in några sekunder av strömmen och letar efter sådan metadata, men många strömmar saknar den helt.',
   manifest:
-    'Den råa, otolkade texten i .m3u8-filen som hämtades från servern - beskriver vilka segment eller varianter som finns.',
+    'Den råa, otolkade texten i .m3u8-filen som hämtades från servern som beskriver vilka segment eller varianter som finns.',
   natverksvag:
     'Visar vilken CDN-nod eller edge-server som svarade, utläst ur headrar som matchar vanliga routing-konventioner (x-cache, x-served, via, cf-*, x-amz-cf-* m.fl.), samt en DNS-uppslagning av värdnamnet.',
 
