@@ -78,6 +78,17 @@ const failedAt = (startSec, message = 'Kunde inte ansluta.') =>
 const busyAt = (startSec, message = 'Servern kör redan så många analyser den tar samtidigt.') =>
   log.toLogEntry(null, { t: iso(startSec), ok: false, status: 'busy', attemptedAtMs: at(startSec), errorMessage: message });
 
+// fetch() itself failed - the backend was not reachable at all, not a fact about
+// the stream either (and not even a fact that our server was up).
+const noConnectionAt = (startSec, message = 'Kunde inte nå servern: Failed to fetch') =>
+  log.toLogEntry(null, {
+    t: iso(startSec),
+    ok: false,
+    status: 'no-connection',
+    attemptedAtMs: at(startSec),
+    errorMessage: message,
+  });
+
 // ---------------------------------------------------------------------------
 // Placing silence on the clock
 // ---------------------------------------------------------------------------
@@ -175,18 +186,38 @@ test('toLogEntry stays backward compatible when only ok is given', () => {
   assert.equal(failedAt(0).status, 'failed');
 });
 
+test('toLogEntry marks an unreachable backend as no-connection, not failed', () => {
+  // fetch() itself threw - not even an HTTP response came back, unlike every other
+  // failure branch, which at minimum means our server was up and answering.
+  const entry = noConnectionAt(0, 'Kunde inte nå servern: Failed to fetch');
+
+  assert.equal(entry.ok, false);
+  assert.equal(entry.status, 'no-connection');
+  assert.equal(entry.errorMessage, 'Kunde inte nå servern: Failed to fetch');
+});
+
 // ---------------------------------------------------------------------------
 // reachableEntries - what feeds mergeSilences/deriveOutages once a busy poll exists
 // ---------------------------------------------------------------------------
 
-test('reachableEntries drops only busy polls, keeping ok and genuinely failed ones', () => {
-  const entries = [entryAt(0), busyAt(15), failedAt(30), entryAt(45)];
+test('reachableEntries drops busy and no-connection polls, keeping ok and genuinely failed ones', () => {
+  const entries = [entryAt(0), busyAt(15), noConnectionAt(30), failedAt(45), entryAt(60)];
   const reachable = log.reachableEntries(entries);
 
   assert.equal(reachable.length, 3);
   assert.equal(reachable[0].status, 'ok');
   assert.equal(reachable[1].status, 'failed');
   assert.equal(reachable[2].status, 'ok');
+});
+
+test('an isolated no-connection poll must not read as a stream outage on its own', () => {
+  // The exact same misclassification busy polls can cause: an unreachable backend
+  // is not a fact about the stream, so a lone one between two healthy polls must
+  // not become a "strömmen nere" gap.
+  const entries = [entryAt(0), noConnectionAt(15), entryAt(30)];
+
+  assert.equal(log.deriveOutages(entries, at(45)).length, 1); // unfiltered: misread
+  assert.equal(log.deriveOutages(log.reachableEntries(entries)).length, 0); // filtered: correct
 });
 
 test('an isolated busy poll must not read as a stream outage on its own', () => {
@@ -423,14 +454,15 @@ test('derivePointEvents catches a failover to a different encoder', () => {
   assert.equal(log.derivePointEvents(before, after).filter((e) => e.type === 'format-change').length, 1);
 });
 
-test('derivePointEvents flags true peak only above 0.1 dBTP', () => {
+test('derivePointEvents flags true peak only above -1 dBTP', () => {
   const peak = (v) => log.derivePointEvents(null, { t: iso(0), ok: true, truePeak: v }).some((e) => e.type === 'clipping');
 
   assert.equal(peak(0.4), true);
-  assert.equal(peak(0.1), false);
-  // A stream mastered right up to full scale is normal and must not fill the feed.
-  assert.equal(peak(-0.5), false);
+  assert.equal(peak(-0.5), true);
+  assert.equal(peak(-1), false);
+  // Comfortably under the safety margin - normal, must not fill the feed.
   assert.equal(peak(-1.2), false);
+  assert.equal(peak(-3), false);
 });
 
 test('derivePointEvents stays quiet about loudness drift until it is switched on', () => {
@@ -507,6 +539,18 @@ test('summarize excludes busy polls from both sides of the success rate', () => 
   assert.equal(stats.okPercent, 100); // not 60% - busy is not a failure
 });
 
+test('summarize tracks no-connection separately from busy, both excluded from the rate', () => {
+  // The two reasons a poll can be skipped mean different things (server overloaded
+  // vs. server unreachable) and are reported as separate counts, not merged into one.
+  const entries = [entryAt(0), noConnectionAt(15), entryAt(30), busyAt(45), entryAt(60)];
+  const stats = log.summarize(entries, []);
+
+  assert.equal(stats.noConnectionCount, 1);
+  assert.equal(stats.busyCount, 1);
+  assert.equal(stats.pollCount, 3);
+  assert.equal(stats.okPercent, 100);
+});
+
 test('summarize keeps session length keyed on every attempt, busy included', () => {
   // sessionSec is wall-clock elapsed time, which is true regardless of how many
   // cycles the server was too busy to run - unlike the success-rate stats above.
@@ -547,6 +591,25 @@ test('recovering from an outage does not fire a spurious track-change event', ()
 
   const fixed = log.derivePointEvents(log.lastMeasuredEntry([before, failedAt(15)]), afterOutage);
   assert.equal(fixed.filter((e) => e.type === 'metadata-change').length, 0);
+});
+
+// ---------------------------------------------------------------------------
+// consecutiveNoConnectionCount - drives the auto-stop when the backend, not the
+// stream, is what's actually down (see appendEntry/stopLoggingForUnreachableBackend)
+// ---------------------------------------------------------------------------
+
+test('consecutiveNoConnectionCount counts back from the end of the log', () => {
+  assert.equal(log.consecutiveNoConnectionCount([entryAt(0), noConnectionAt(15), noConnectionAt(30)]), 2);
+  assert.equal(log.consecutiveNoConnectionCount([noConnectionAt(0)]), 1);
+  assert.equal(log.consecutiveNoConnectionCount([]), 0);
+});
+
+test('consecutiveNoConnectionCount resets the moment the backend answers again', () => {
+  // A single blip must not linger and eventually trip the auto-stop threshold days
+  // later just because two non-adjacent no-connection polls happened to occur.
+  assert.equal(log.consecutiveNoConnectionCount([noConnectionAt(0), entryAt(15), noConnectionAt(30)]), 1);
+  assert.equal(log.consecutiveNoConnectionCount([noConnectionAt(0), busyAt(15), noConnectionAt(30)]), 1);
+  assert.equal(log.consecutiveNoConnectionCount([noConnectionAt(0), failedAt(15), noConnectionAt(30)]), 1);
 });
 
 test('shouldWarnLongSession triggers only after the threshold has passed', () => {
@@ -599,11 +662,11 @@ test('toCsv writes a header even with nothing logged', () => {
   assert.equal(log.toCsv(null).split('\n').length, 1);
 });
 
-test('toCsv carries the ok/busy/failed distinction in its own column', () => {
-  // strom_ok alone is just 0/1 - it cannot tell "server too busy to try" apart
-  // from "the stream itself failed", which is exactly the distinction a
-  // programmatic reader of the export needs and the UI already makes.
-  const csv = log.toCsv([entryAt(0), busyAt(15), failedAt(30)]);
+test('toCsv carries the ok/busy/no-connection/failed distinction in its own column', () => {
+  // strom_ok alone is just 0/1 - it cannot tell "server too busy to try" or "server
+  // unreachable" apart from "the stream itself failed", which is exactly the
+  // distinction a programmatic reader of the export needs and the UI already makes.
+  const csv = log.toCsv([entryAt(0), busyAt(15), noConnectionAt(30), failedAt(45)]);
   const header = csv.split('\n')[0].split(';');
   const statusCol = header.indexOf('status');
 
@@ -611,5 +674,6 @@ test('toCsv carries the ok/busy/failed distinction in its own column', () => {
   const rows = csv.split('\n').slice(1);
   assert.equal(rows[0].split(';')[statusCol], 'ok');
   assert.equal(rows[1].split(';')[statusCol], 'busy');
-  assert.equal(rows[2].split(';')[statusCol], 'failed');
+  assert.equal(rows[2].split(';')[statusCol], 'no-connection');
+  assert.equal(rows[3].split(';')[statusCol], 'failed');
 });

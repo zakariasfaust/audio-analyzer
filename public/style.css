@@ -16,6 +16,14 @@ h1 {
   gap: 0.75rem;
 }
 
+/* Mirrors #log-controls: a thin controls bar at the top of the results, in the
+   same spot Stoppa loggning sits in the log view - see renderAnalysisControls(). */
+#analysis-controls {
+  margin-bottom: 0.5rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid #eee;
+}
+
 #copy-btn {
   font-size: 0.8rem;
   padding: 0.15rem 0.5rem;
@@ -156,6 +164,13 @@ tr.variant-active {
    never be mistaken for "strömmen nere" in the log's status column. */
 .busy {
   color: #b45309;
+}
+
+/* Our own backend was unreachable, not the stream - a third colour again, distinct
+   from both .busy and .error, so it can't be mistaken for either. */
+.unreachable {
+  color: #6b7280;
+  font-style: italic;
 }
 
 dl {

@@ -36,13 +36,24 @@ const MAX_BRIDGE_MS = 4000;
 // this list exists to catch dead air, not to be pedantic about its length.
 const THRESHOLD_SLACK_SEC = 1;
 
-// True peak above this gets an event. Digital full scale is 0 dBTP; anything over is
-// an intersample overshoot that some players will audibly distort.
-const CLIPPING_DBTP = 0.1;
+// True peak above this gets an event. -1 dBTP is the usual broadcast/streaming
+// safety margin below digital full scale (0 dBTP), leaving headroom for the
+// intersample overshoots lossy encoders downstream can introduce.
+const CLIPPING_DBTP = -1;
 
 const WARN_AFTER_HOURS = 24;
 const MAX_TABLE_ROWS = 200;
 const STORAGE_KEY = 'audio-analyzer-log-v1';
+
+// Stop logging automatically after this many *consecutive* polls that couldn't even
+// reach our own backend (not a stream error - fetch() itself failed, e.g. the server
+// process is down, or the machine dropped off the network). One such poll could be a
+// one-off blip; two in a row (~30s of total unreachability at the fixed interval)
+// means there is nothing left to log - continuing would just keep drawing a
+// misleadingly stream-shaped gap in the chart for a fault that has nothing to do
+// with the stream. Consistent with the existing "no pause, only stop" model: this
+// calls the same stop path a manual click does, not a new pause state.
+const MAX_CONSECUTIVE_NO_CONNECTION = 2;
 
 const CHART_COLORS = {
   lufs: '#0b6bcb',
@@ -152,7 +163,13 @@ function toLogEntry(sampleBody, { t, ok, status, attemptedAtMs, errorMessage = n
       sampleRate: null,
       channels: null,
       nowPlaying: null,
-      errorMessage: errorMessage || (resolvedStatus === 'busy' ? 'Servern upptagen.' : 'Okänt fel'),
+      errorMessage:
+        errorMessage ||
+        (resolvedStatus === 'busy'
+          ? 'Servern upptagen.'
+          : resolvedStatus === 'no-connection'
+          ? 'Kunde inte nå servern.'
+          : 'Okänt fel'),
     };
   }
 
@@ -287,18 +304,32 @@ function deriveOutages(entries, nowMs = Date.now()) {
   });
 }
 
-// Drops polls the server refused to even attempt (a local capacity limit, not a
-// fact about the stream) before anything derives silence or outage from them.
-// Filtering the array - rather than teaching mergeSilences/deriveOutages a third
-// branch - keeps their delicate boundary arithmetic untouched, and gets the right
-// behaviour in both directions for free: consecutive real failures either side of
-// a busy poll become one continuous outage (a busy cycle is not "the stream came
-// back"), while a silence run does NOT bridge across the same gap, because a busy
-// cycle typically spans close to the full interval - well past MAX_BRIDGE_MS - so
-// there is no basis for assuming the stream stayed silent through it, unlike an
-// outage, where "still down" is the safe assumption.
+// Drops polls that never actually told us anything about the stream - either the
+// server refused to even attempt one (a local capacity limit, "busy"), or the
+// browser couldn't reach the server at all ("no-connection") - before anything
+// derives silence or outage from them. Filtering the array - rather than teaching
+// mergeSilences/deriveOutages a third/fourth branch - keeps their delicate boundary
+// arithmetic untouched, and gets the right behaviour in both directions for free:
+// consecutive real failures either side of a dropped poll become one continuous
+// outage (a busy/unreachable cycle is not "the stream came back"), while a silence
+// run does NOT bridge across the same gap, because such a cycle typically spans
+// close to the full interval - well past MAX_BRIDGE_MS - so there is no basis for
+// assuming the stream stayed silent through it, unlike an outage, where "still
+// down" is the safe assumption.
 function reachableEntries(entries) {
-  return (entries || []).filter((e) => e.status !== 'busy');
+  return (entries || []).filter((e) => e.status !== 'busy' && e.status !== 'no-connection');
+}
+
+// How many polls, counting back from the most recent, failed to reach the backend
+// at all. Used to auto-stop the log once the backend - not the stream - is clearly
+// the thing that's down (see MAX_CONSECUTIVE_NO_CONNECTION).
+function consecutiveNoConnectionCount(entries) {
+  let count = 0;
+  for (let i = entries.length - 1; i >= 0; i--) {
+    if (entries[i].status !== 'no-connection') break;
+    count++;
+  }
+  return count;
 }
 
 function allGaps(entries, nowMs = Date.now()) {
@@ -356,12 +387,13 @@ function derivePointEvents(prev, entry, session = {}) {
 }
 
 function summarize(entries, gaps) {
-  // A busy poll is not information about the stream - it counts neither as a
-  // success nor a failure, so it is excluded from both sides of the success rate
+  // A busy or no-connection poll is not information about the stream - it counts
+  // neither as a success nor a failure, so both are excluded from the success rate
   // rather than silently dragging it down. sessionSec below stays keyed off the
   // full, unfiltered entries: wall-clock logging time is true regardless of how
-  // many cycles the server was too busy to actually run.
+  // many cycles never actually reached the stream.
   const busyCount = entries.filter((e) => e.status === 'busy').length;
+  const noConnectionCount = entries.filter((e) => e.status === 'no-connection').length;
   const reachable = reachableEntries(entries);
   const total = reachable.length;
   const okEntries = reachable.filter((e) => e.ok);
@@ -377,6 +409,7 @@ function summarize(entries, gaps) {
   return {
     pollCount: total,
     busyCount,
+    noConnectionCount,
     okCount: okEntries.length,
     okPercent: total ? (okEntries.length / total) * 100 : null,
     sessionSec: first && last ? (last - first) / 1000 : 0,
@@ -472,22 +505,29 @@ function fmtClock(value) {
 function renderSummary(stats) {
   const container = el('log-summary');
   if (!container) return;
-  if (!stats.pollCount && !stats.busyCount) {
+  if (!stats.pollCount && !stats.busyCount && !stats.noConnectionCount) {
     container.innerHTML = '';
     return;
   }
 
   // Only mentioned when it actually happened - otherwise this is silent, invisible
-  // data loss: without it, a run of busy-skipped cycles just makes the poll count
-  // look smaller than the session length would suggest, with no explanation why.
-  const busyNote = stats.busyCount ? ` (${fmtInt(stats.busyCount)} hoppade över p.g.a. serverbelastning)` : '';
+  // data loss: without it, a run of skipped cycles just makes the poll count look
+  // smaller than the session length would suggest, with no explanation why. The two
+  // reasons are kept apart rather than folded into one count, because they mean very
+  // different things: one is our server being momentarily busy, the other is it
+  // being unreachable altogether (which also auto-stops the log - see runCycle()).
+  const skipNotes = [
+    stats.busyCount ? `${fmtInt(stats.busyCount)} p.g.a. serverbelastning` : null,
+    stats.noConnectionCount ? `${fmtInt(stats.noConnectionCount)} p.g.a. att servern inte kunde nås` : null,
+  ].filter(Boolean);
+  const skipNote = skipNotes.length ? ` (${skipNotes.join(', ')} hoppade över)` : '';
 
   container.innerHTML = `
     <section>
       <h2>Sammanfattning</h2>
       <dl>
         <dt>Loggat sedan</dt><dd>${fmtDuration(stats.sessionSec)}${logRunning ? '' : ' (stoppad)'}</dd>
-        <dt>Mätningar</dt><dd>${fmtInt(stats.pollCount)} st, ${fmtNumber(stats.okPercent, 0)} % lyckade${busyNote}</dd>
+        <dt>Mätningar</dt><dd>${fmtInt(stats.pollCount)} st, ${fmtNumber(stats.okPercent, 0)} % lyckade${skipNote}</dd>
         ${withHint('dt', 'Medel-LUFS', 'medel-lufs')}<dd>${
           stats.meanLufs === null ? '–' : fmtNumber(stats.meanLufs) + ' LUFS'
         }</dd>
@@ -591,13 +631,28 @@ function renderTable() {
         <td>${e.silenceSec === null ? '–' : fmtNumber(e.silenceSec)}</td>
         <td>${e.bitrateKbps === null ? '–' : fmtNumber(e.bitrateKbps)}</td>
         <td>${esc(e.nowPlaying) || '–'}</td>
-        <td${e.status === 'busy' ? ' class="busy"' : e.ok ? '' : ' class="error"'}>${
+        <td${
           // The column reports the stream, not the measurement: a failed loudness pass
           // still means the stream delivered audio, so it stays OK - but silently so
           // would leave the empty LUFS and peak cells on this row unexplained. "Busy"
-          // is neither OK nor a stream failure - the server never even checked - so it
-          // gets its own colour, distinct from the red used for a genuine stream error.
-          e.status === 'busy' ? esc(e.errorMessage) : e.ok ? (e.errorMessage ? 'OK (nivå ej mätt)' : 'OK') : esc(e.errorMessage)
+          // and "no-connection" are neither OK nor a stream failure - our own server
+          // either refused or couldn't be reached at all - so each gets its own colour,
+          // distinct from the red used for a genuine stream error.
+          e.status === 'busy'
+            ? ' class="busy"'
+            : e.status === 'no-connection'
+            ? ' class="unreachable"'
+            : e.ok
+            ? ''
+            : ' class="error"'
+        }>${
+          e.status === 'busy' || e.status === 'no-connection'
+            ? esc(e.errorMessage)
+            : e.ok
+            ? e.errorMessage
+              ? 'OK (nivå ej mätt)'
+              : 'OK'
+            : esc(e.errorMessage)
         }</td>
       </tr>`
     )
@@ -977,12 +1032,30 @@ function lastMeasuredEntry(entries) {
   return null;
 }
 
+// Stops the log the same way the Stoppa-knappen does - no separate pause state -
+// and leaves a persistent, unmissable explanation in place of the usual controls,
+// so a chart that has gone silent because the *backend* died is never mistaken
+// for the stream itself having gone silent or down.
+function stopLoggingForUnreachableBackend() {
+  stopStreamLog();
+  showLogError(
+    'Servern svarar inte längre - loggningen stoppades automatiskt. ' +
+      'Kontrollera att servern körs, och starta loggningen igen när den är uppe.'
+  );
+}
+
 function appendEntry(entry) {
   const prev = lastMeasuredEntry(logEntries);
   logEntries.push(entry);
   logEvents.push(...derivePointEvents(prev, entry, logSession || {}));
   logDirty = true;
   persist();
+
+  if (entry.status === 'no-connection' && consecutiveNoConnectionCount(logEntries) >= MAX_CONSECUTIVE_NO_CONNECTION) {
+    stopLoggingForUnreachableBackend();
+    return;
+  }
+
   renderAll();
 }
 
@@ -1013,7 +1086,18 @@ async function pollOnce() {
   } catch (err) {
     // Aborting is us stopping, not the stream failing - it must not become a data point.
     if (err.name === 'AbortError') return null;
-    return toLogEntry(null, { t, ok: false, attemptedAtMs, errorMessage: 'Kunde inte nå servern: ' + err.message });
+    // fetch() itself threw - the browser never got a response at all. That is a
+    // fact about *our own backend* (down, crashed, unreachable network) with no
+    // information about the stream whatsoever, unlike every other branch here,
+    // which at minimum means our server was up and answering. Tagged distinctly
+    // so it is never bookkept as "strömmen nere" (see reachableEntries()).
+    return toLogEntry(null, {
+      t,
+      ok: false,
+      status: 'no-connection',
+      attemptedAtMs,
+      errorMessage: 'Kunde inte nå servern: ' + err.message,
+    });
   } finally {
     logAbort = null;
   }

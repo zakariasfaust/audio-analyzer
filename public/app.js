@@ -8,8 +8,17 @@ const urlInput = document.getElementById('url-input');
 const analyzeBtn = document.getElementById('analyze-btn');
 const statusEl = document.getElementById('status');
 const resultsEl = document.getElementById('results');
-const copyBtn = document.getElementById('copy-btn');
 const faqEl = document.getElementById('faq');
+
+// The copy button only exists while an analysis is actually showing - it is part
+// of the rendered result (see renderAnalysisControls()), not a fixture in the
+// header, so it disappears entirely for the log view and before the first
+// analysis rather than sitting there disabled. Its node is destroyed and
+// recreated on every render, so it is looked up fresh here instead of cached.
+function setCopyEnabled(enabled) {
+  const btn = document.getElementById('copy-btn');
+  if (btn) btn.disabled = !enabled;
+}
 
 // Latest analysis result - kept in memory so the Copy button can build
 // the text excerpt without redoing any network requests.
@@ -630,6 +639,17 @@ function renderIcecastSample(sample, error) {
     ${id3Block}`;
 }
 
+// A small controls bar at the top of the results, in the same spot the log view
+// puts its own controls (#log-controls/"Stoppa loggning") - prepended to every
+// successful analysis render so the Copy button only ever exists alongside an
+// actual result, never as a permanently-visible-but-disabled fixture.
+function renderAnalysisControls() {
+  return `
+    <div id="analysis-controls">
+      <button type="button" id="copy-btn" title="Kopiera all analysdata (utom råmanifestet) som text, t.ex. för att klistra in i en AI-tjänst" disabled>Kopiera analys</button>
+    </div>`;
+}
+
 function renderWarnings(errors) {
   const entries = Object.entries(errors || {});
   if (!entries.length) return '';
@@ -1066,7 +1086,6 @@ async function runAnalysis(targetUrl, { isVariantSwitch = false } = {}) {
 
   if (faqEl) faqEl.open = false; // collapse the FAQ so it never buries the results
   analyzeBtn.disabled = true;
-  copyBtn.disabled = true;
   lastAnalyzeData = null;
   lastSampleData = null;
   lastSampleError = null;
@@ -1108,6 +1127,7 @@ async function runAnalysis(targetUrl, { isVariantSwitch = false } = {}) {
 
   if (data.streamKind === 'dash') {
     resultsEl.innerHTML =
+      renderAnalysisControls() +
       renderWarnings(data.errors) +
       renderConnection(data.connection) +
       renderNetworkPath(data.networkPath) +
@@ -1120,6 +1140,7 @@ async function runAnalysis(targetUrl, { isVariantSwitch = false } = {}) {
       renderDashManifest(data.manifests);
   } else if (data.streamKind === 'icecast') {
     resultsEl.innerHTML =
+      renderAnalysisControls() +
       renderWarnings(data.errors) +
       renderConnection(data.connection) +
       renderNetworkPath(data.networkPath) +
@@ -1131,6 +1152,7 @@ async function runAnalysis(targetUrl, { isVariantSwitch = false } = {}) {
       baseVariantsInfo = data.variants;
     }
     resultsEl.innerHTML =
+      renderAnalysisControls() +
       renderWarnings(data.errors) +
       renderConnection(data.connection) +
       renderNetworkPath(data.networkPath) +
@@ -1144,7 +1166,7 @@ async function runAnalysis(targetUrl, { isVariantSwitch = false } = {}) {
   }
 
   lastAnalyzeData = data;
-  copyBtn.disabled = false;
+  setCopyEnabled(true);
 
   const isIcecast = data.streamKind === 'icecast';
   statusEl.textContent = isIcecast ? 'Spelar in ljudprov…' : 'Hämtar nu spelas…';
@@ -1190,11 +1212,13 @@ if (logBtn) {
       return;
     }
     // Same page, same results area as Analysera - the log takes over #results and
-    // owns it until the user analyses or logs again.
+    // owns it until the user analyses or logs again. That takeover (see
+    // startStreamLog -> resultsEl.innerHTML = '') already removes the copy button
+    // along with the rest of the previous analysis, so there is nothing to disable
+    // here - it simply stops existing.
     lastAnalyzeData = null;
     lastSampleData = null;
     lastSampleError = null;
-    copyBtn.disabled = true;
     analyzedUrlInfoEl.textContent = '';
     analyzedUrlInfoEl.hidden = true;
     currentAnalyzedUrl = url;
@@ -1224,15 +1248,20 @@ resultsEl.addEventListener('click', (event) => {
   runAnalysis(variantUrl, { isVariantSwitch: true });
 });
 
-copyBtn.addEventListener('click', async () => {
-  if (!lastAnalyzeData) return;
+// The button lives inside #results (see renderAnalysisControls()) and its node is
+// replaced on every render, so it is caught here via delegation on the ancestor -
+// the same pattern the variant-row handler above already uses - rather than a
+// direct binding that would go stale the moment a new analysis re-renders it.
+resultsEl.addEventListener('click', async (event) => {
+  const btn = event.target.closest('#copy-btn');
+  if (!btn || btn.disabled || !lastAnalyzeData) return;
   const text = buildCopyText(lastAnalyzeData, lastSampleData, lastSampleError, baseVariantsInfo);
-  const originalLabel = copyBtn.textContent;
+  const originalLabel = btn.textContent;
   try {
     await navigator.clipboard.writeText(text);
-    copyBtn.textContent = 'Kopierat!';
+    btn.textContent = 'Kopierat!';
   } catch (err) {
-    copyBtn.textContent = 'Kunde inte kopiera';
+    btn.textContent = 'Kunde inte kopiera';
   }
-  setTimeout(() => { copyBtn.textContent = originalLabel; }, 1500);
+  setTimeout(() => { btn.textContent = originalLabel; }, 1500);
 });

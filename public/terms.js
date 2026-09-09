@@ -200,7 +200,7 @@ const STREAM_TERMS = {
   'tystnad-avbrott':
     'Tystnad och avbrott är två olika fel och listas därför var för sig. "Tystnad" betyder att strömmen svarade och ljudet gick att spela in, men var tyst - sändningen har tappat sitt innehåll medan servern fortfarande fungerar. "Strömmen nere" betyder att anropet misslyckades helt: ingen ljuddata kom fram. Tystnad kortare än den inställda gränsen visas ingenstans - varken här, i sammanfattningen, i grafen eller bland händelserna.',
   'status-strom':
-    'Om hämtningen av ljudet lyckades - alltså om strömmen svarade och gick att spela in. Det säger ingenting om att ljudet lät bra: femton sekunders total tystnad ger också OK. Misslyckas hämtningen räknas det som ett avbrott ("strömmen nere") - utom när servern själv var för upptagen för att ens försöka, vilket visas separat och inte räknas som att strömmen var nere.',
+    'Om hämtningen av ljudet lyckades - alltså om strömmen svarade och gick att spela in. Det säger ingenting om att ljudet lät bra: femton sekunders total tystnad ger också OK. Misslyckas hämtningen räknas det som ett avbrott ("strömmen nere") - utom när felet beror på verktygets egen server: att den var upptagen, eller att den inte gick att nå alls. Båda visas separat och räknas inte som att strömmen var nere, eftersom de inte säger något om strömmen.',
   'tystnad-typ':
     'Tystnad = strömmen fungerade men lät ingenting. Strömmen nere = anropet misslyckades, t.ex. att servern inte svarade eller svarade med ett fel.',
   'medel-lufs':

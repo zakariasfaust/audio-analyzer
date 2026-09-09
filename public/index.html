@@ -8,7 +8,6 @@
 <body>
   <div id="header-row">
     <h1>Audio analyzer</h1>
-    <button type="button" id="copy-btn" title="Kopiera all analysdata (utom råmanifestet) som text, t.ex. för att klistra in i en AI-tjänst" disabled>Kopiera analys</button>
   </div>
 
   <form id="analyze-form">
@@ -88,6 +87,12 @@
         Loggen lever bara i den här webbläsarfliken. Stänger du fliken utan att
         exportera (JSON eller CSV) försvinner den. Loggningen går inte att pausa —
         bara stoppa — och klickar du Logga igen börjar en helt ny logg från noll.
+      </p>
+      <p>
+        Går verktygets egen server ner mitt i en loggning (skiljt från att själva
+        ljudströmmen har problem) märks det tydligt och stoppar loggningen
+        automatiskt efter två misslyckade försök i rad — annars hade grafen sett ut
+        som om strömmen var nere, fast det bara är verktyget som inte går att nå.
       </p>
     </details>
 
