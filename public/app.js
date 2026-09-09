@@ -100,7 +100,7 @@ function renderVariants(v, activeUrl) {
     return `
       <section id="sec-variants">
         ${withHint('h2', 'Varianter', 'varianter')}
-        <p class="note">Endast en variant tillgänglig (vanligt för radio) - URL:en pekar direkt på media-playlistan.</p>
+        <p class="note">Endast en variant tillgänglig. URL:en pekar direkt på media-playlistan.</p>
       </section>`;
   }
   const rows = v.list
