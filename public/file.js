@@ -13,7 +13,6 @@ const filePick = document.getElementById('file-pick');
 const fileName = document.getElementById('file-name');
 
 let lastFileData = null;
-let fileRunToken = 0;
 
 // --------------------------------------------------------------------------
 // Rendering
@@ -47,7 +46,6 @@ function tagLabel(key) {
 
 function renderFileOverview(data) {
   const f = data.format || {};
-  const x = data.audioExtra || {};
 
   const tagRows = Object.entries(f.tags || {})
     .map(([k, v]) => `<tr><td>${esc(tagLabel(k))}</td><td>${esc(v)}</td></tr>`)
@@ -75,58 +73,86 @@ function renderFileOverview(data) {
        <table><thead><tr><th>Från</th><th>Till</th><th>Titel</th></tr></thead><tbody>${chapterRows}</tbody></table>`
     : '';
 
-  const cover = f.coverArt
-    ? `${f.coverArt.width && f.coverArt.height ? esc(f.coverArt.width + '×' + f.coverArt.height) + ' px' : 'ja'} (${esc(f.coverArt.codec) || 'okänt format'})`
-    : 'nej';
-
-  // TLEN is the file's own claim about its length. Show it as a readable time, and
-  // when it disagrees with the real duration (a trimmed or re-encoded file), say so.
-  const tlenMismatch =
-    f.taggedDurationSec != null &&
-    f.durationSec != null &&
-    fmtDuration(f.taggedDurationSec) !== fmtDuration(f.durationSec);
-  const tlenRow =
-    f.taggedDurationSec != null
-      ? `${withHint('dt', 'Längd enligt tagg (TLEN)', 'tlen')}<dd>${fmtDuration(f.taggedDurationSec)}${
-          tlenMismatch
-            ? ` <span class="tag-mismatch">skiljer sig från filens uppmätta längd (${fmtDuration(f.durationSec)})</span>`
-            : ''
-        }</dd>`
-      : '';
-
-  const bitDepth = data.loudness?.astats
-    ? data.loudness.astats.bitDepthUsed === data.loudness.astats.bitDepthContainer
-      ? `${fmtInt(data.loudness.astats.bitDepthContainer)} bitar`
-      : `${fmtInt(data.loudness.astats.bitDepthContainer)} bitar deklarerat, ${fmtInt(data.loudness.astats.bitDepthUsed)} faktiskt använda`
-    : x.bitsPerRawSample
-    ? `${fmtInt(x.bitsPerRawSample)} bitar`
-    : x.bitsPerSample
-    ? `${fmtInt(x.bitsPerSample)} bitar`
-    : '–';
-
   return `
     <section id="sec-file-overview">
       ${withHint('h2', 'Filen', 'fil-oversikt')}
-      <dl>
-        <dt>Filnamn</dt><dd>${esc(data.originalName) || '–'}</dd>
-        ${withHint('dt', 'Container', 'fil-container')}<dd>${esc(f.container) || '–'}${
-    f.containerLongName ? ' (' + esc(f.containerLongName) + ')' : ''
-  }</dd>
-        ${withHint('dt', 'Längd', 'fil-langd')}<dd>${fmtDuration(f.durationSec)}</dd>
-        ${tlenRow}
-        <dt>Filstorlek</dt><dd>${f.fileSizeBytes ? fmtInt(f.fileSizeBytes) + ' byte' : '–'}</dd>
-        ${withHint('dt', 'Bitrate (snitt)', 'audio-bitrate')}<dd>${
-    f.overallBitrateKbps ? fmtNumber(f.overallBitrateKbps) + ' kbit/s' : '–'
-  }</dd>
-        ${withHint('dt', 'Sampleformat', 'sampleformat')}<dd>${esc(x.sampleFmt) || '–'}</dd>
-        ${withHint('dt', 'Bitdjup', 'bitdjup')}<dd>${bitDepth}</dd>
-        ${withHint('dt', 'Encoder', 'encoder')}<dd>${esc(f.encoder) || '–'}</dd>
-        ${withHint('dt', 'Omslagsbild', 'omslagsbild')}<dd>${cover}</dd>
-      </dl>
+      ${renderDl(fileOverviewFields(data))}
       ${replayBlock}
       <div class="subsection"><h3>Taggar</h3>${tagBlock}</div>
       ${chapterBlock}
     </section>`;
+}
+
+// The "Filen" rows, described once - renderFileOverview() lays them out and
+// buildFileCopyText() writes them as text. See field() in shared.js.
+function fileOverviewFields(data) {
+  const f = data.format || {};
+  const x = data.audioExtra || {};
+  const a = data.loudness?.astats;
+
+  // TLEN is the file's own claim about its length. Show it as a readable time, and
+  // when it disagrees with the real duration (a trimmed or re-encoded file), say so.
+  const tagged = f.taggedDurationSec;
+  const tlenMismatch =
+    tagged != null && f.durationSec != null && fmtDuration(tagged) !== fmtDuration(f.durationSec);
+  const mismatchNote = `skiljer sig från filens uppmätta längd (${fmtDuration(f.durationSec)})`;
+
+  return [
+    field('Filnamn', null, data.originalName || '–'),
+    field('Container', 'fil-container', f.container ? f.container + (f.containerLongName ? ` (${f.containerLongName})` : '') : '–'),
+    field('Längd', 'fil-langd', fmtDuration(f.durationSec)),
+    tagged != null &&
+      field(
+        'Längd enligt tagg (TLEN)',
+        'tlen',
+        fmtDuration(tagged) + (tlenMismatch ? ` – ${mismatchNote}` : ''),
+        fmtDuration(tagged) + (tlenMismatch ? ` <span class="tag-mismatch">${esc(mismatchNote)}</span>` : '')
+      ),
+    field('Filstorlek', null, f.fileSizeBytes ? fmtInt(f.fileSizeBytes) + ' byte' : '–'),
+    field('Bitrate (snitt)', 'audio-bitrate', f.overallBitrateKbps ? fmtNumber(f.overallBitrateKbps) + ' kbit/s' : '–'),
+    field('Sampleformat', 'sampleformat', x.sampleFmt || '–'),
+    field('Bitdjup', 'bitdjup', bitDepthText(x, a)),
+    field('Encoder', 'encoder', f.encoder || '–'),
+    field('Omslagsbild', 'omslagsbild', coverArtText(f.coverArt)),
+  ];
+}
+
+// ffmpeg's integer sample formats (u8/s16/s32/s64, planar or not) - everything else it
+// decodes to is float.
+const INTEGER_SAMPLE_FMT = /^(?:u8|s16|s32|s64)p?$/;
+
+// astats' "Bit depth" measures the samples in the decoder's output buffer. For an
+// integer PCM source that buffer *is* the file, and "how many of the declared bits the
+// samples actually exercise" is a real reading - a 24-bit master that only ever uses 16
+// bits was upconverted from a 16-bit source. For anything decoded to float it measures
+// ffmpeg's own buffer instead, and the numbers are not merely meaningless but unstable:
+// the same MP3 reads 30/32 through one filter chain and 41/43 through the one this app
+// runs. A file that has no bit depth has to say so rather than show a number.
+function bitDepthText(audioExtra, astats) {
+  const fmt = audioExtra.sampleFmt;
+  if (!fmt) return '–';
+  if (!INTEGER_SAMPLE_FMT.test(fmt)) return `gäller inte (${fmt} – flyttal)`;
+
+  const declared = astats?.bitDepthContainer ?? audioExtra.bitsPerRawSample ?? audioExtra.bitsPerSample ?? null;
+  if (declared === null) return '–';
+  const used = astats?.bitDepthUsed;
+  return used == null || used === declared
+    ? `${fmtInt(declared)} bitar`
+    : `${fmtInt(declared)} bitar deklarerat, ${fmtInt(used)} faktiskt använda`;
+}
+
+function coverArtText(cover) {
+  if (!cover) return 'nej';
+  const size = cover.width && cover.height ? `${cover.width}×${cover.height} px` : 'ja';
+  return `${size} (${cover.codec || 'okänt format'})`;
+}
+
+// The ceiling comes from analyzedSeconds rather than a literal, so the sentence follows
+// FILE_ANALYSIS_MAX_SECONDS if it is ever retuned on the server.
+function truncationNote(l) {
+  return `Filen är längre än ${fmtInt(l.analyzedSeconds / 60)} minuter – analysen nedan gäller de första ${fmtDuration(
+    l.analyzedSeconds
+  )}.`;
 }
 
 // The silence-gated mono / out-of-phase stretches (see gatePhasingBySilence on the
@@ -170,22 +196,75 @@ function stereoVerdict(stereo) {
   return 'kanalerna motverkar varandra – energi går förlorad vid mono-summering';
 }
 
-function renderStereoRow(stereo) {
-  const dt = withHint('dt', 'Stereokorrelation', 'stereokorrelation');
-  if (!stereo) return `${dt}<dd>– (kunde inte mätas)</dd>`;
+// The correlation reading, as a field: the plain text carries the verdict as a dash
+// clause, the HTML adds the warning colour when the channels actually cancel.
+function stereoField(stereo) {
+  const make = (text, html) => field('Stereokorrelation', 'stereokorrelation', text, html);
+  if (!stereo) return make('– (kunde inte mätas)');
   if (stereo.correlation === null || stereo.correlation === undefined) {
-    return `${dt}<dd>– (för lite ljud för att mäta)</dd>`;
+    return make('– (för lite ljud för att mäta)');
   }
+
+  const value = fmtCorrelation(stereo.correlation);
   const verdict = stereoVerdict(stereo);
-  const windowNote = stereo.windowTruncated
-    ? ` <span class="note">(uppmätt över de första ${fmtDuration(stereo.windowSec, 0)})</span>`
-    : '';
+  const windowNote = stereo.windowTruncated ? ` (uppmätt över de första ${fmtDuration(stereo.windowSec, 0)})` : '';
+
+  const text = value + (verdict ? ` – ${verdict}` : '') + windowNote;
   const verdictHtml = !verdict
     ? ''
     : stereo.correlation < 0
     ? ` · <span class="stereo-warn">${esc(verdict)}</span>`
     : ` · ${esc(verdict)}`;
-  return `${dt}<dd>${fmtCorrelation(stereo.correlation)}${verdictHtml}${windowNote}</dd>`;
+  const html = value + verdictHtml + (windowNote ? ` <span class="note">${esc(windowNote.trim())}</span>` : '');
+  return make(text, html);
+}
+
+// The "Ljudnivå och dynamik" rows, described once - see field() in shared.js.
+function loudnessFields(data) {
+  const l = data.loudness || {};
+  const a = l.astats || {};
+  const isStereo = (data.audio?.channels || 0) >= 2;
+  const or = (v, fmt) => (v === null || v === undefined ? '–' : fmt(v));
+
+  return [
+    field('Integrerad nivå', 'integrated-lufs', or(l.integratedLufs, (v) => fmtNumber(v) + ' LUFS')),
+    field(
+      'Loudness range (LRA)',
+      'lra',
+      or(
+        l.lra,
+        (v) =>
+          fmtNumber(v) +
+          ' LU' +
+          (l.lraLow !== null && l.lraHigh !== null ? ` (${fmtNumber(l.lraLow)} … ${fmtNumber(l.lraHigh)} LUFS)` : '')
+      )
+    ),
+    field(
+      'True peak',
+      'true-peak',
+      l.truePeakIsSilent ? '−∞ dBTP (helt digitalt tyst)' : or(l.truePeakDbfs, (v) => fmtNumber(v) + ' dBTP')
+    ),
+    field(
+      'Sample peak',
+      'sample-peak',
+      l.samplePeakDbfs === null || l.samplePeakDbfs === undefined
+        ? l.truePeakIsSilent
+          ? '−∞ dBFS'
+          : '–'
+        : fmtNumber(l.samplePeakDbfs) + ' dBFS'
+    ),
+    field('PLR (peak − nivå)', 'plr', or(l.plr, (v) => fmtNumber(v) + ' LU')),
+    field('Crest factor', 'crest-factor', or(a.crestFactor, (v) => fmtNumber(v, 2))),
+    field('DC-offset', 'dc-offset', or(a.dcOffset, (v) => fmtNumber(v, 4))),
+    field('RMS-nivå', 'rms-niva', or(a.rmsLevelDb, (v) => fmtNumber(v) + ' dB')),
+    field('Brusgolv', 'brusgolv', or(a.noiseFloorDb, (v) => fmtNumber(v) + ' dB')),
+    field(
+      'Samplingar i digitalt max',
+      'klippning',
+      or(a.absPeakCount, (v) => fmtInt(v) + (v ? ' (kan betyda klippning eller hård limitering)' : ''))
+    ),
+    isStereo && stereoField(l.stereo),
+  ];
 }
 
 function renderFileLoudness(data) {
@@ -195,45 +274,16 @@ function renderFileLoudness(data) {
   const l = data.loudness;
   if (!l) return `<section id="sec-file-loudness">${head}<p class="note">Kunde inte mätas.</p></section>`;
 
-  const a = l.astats || {};
   const isStereo = (data.audio?.channels || 0) >= 2;
-  const truePeak = l.truePeakIsSilent
-    ? '−∞ dBTP (helt digitalt tyst)'
-    : l.truePeakDbfs === null
-    ? '–'
-    : fmtNumber(l.truePeakDbfs) + ' dBTP';
-
   const truncNote = l.truncated
-    ? `<p class="note">Filen är längre än 130 minuter – analysen nedan gäller de första ${fmtDuration(
-        l.analyzedSeconds
-      )}.</p>`
+    ? `<p class="note">${esc(truncationNote(l))}</p>`
     : '';
 
   return `
     <section id="sec-file-loudness">
       ${head}
       ${truncNote}
-      <dl>
-        ${withHint('dt', 'Integrerad nivå', 'integrated-lufs')}<dd>${
-    l.integratedLufs === null ? '–' : fmtNumber(l.integratedLufs) + ' LUFS'
-  }</dd>
-        ${withHint('dt', 'Loudness range (LRA)', 'lra')}<dd>${
-    l.lra === null ? '–' : fmtNumber(l.lra) + ' LU' + (l.lraLow !== null && l.lraHigh !== null ? ` (${fmtNumber(l.lraLow)} … ${fmtNumber(l.lraHigh)} LUFS)` : '')
-  }</dd>
-        ${withHint('dt', 'True peak', 'true-peak')}<dd>${truePeak}</dd>
-        ${withHint('dt', 'Sample peak', 'sample-peak')}<dd>${
-    l.samplePeakDbfs === null ? (l.truePeakIsSilent ? '−∞ dBFS' : '–') : fmtNumber(l.samplePeakDbfs) + ' dBFS'
-  }</dd>
-        ${withHint('dt', 'PLR (peak − nivå)', 'plr')}<dd>${l.plr === null ? '–' : fmtNumber(l.plr) + ' LU'}</dd>
-        ${withHint('dt', 'Crest factor', 'crest-factor')}<dd>${a.crestFactor === null || a.crestFactor === undefined ? '–' : fmtNumber(a.crestFactor, 2)}</dd>
-        ${withHint('dt', 'DC-offset', 'dc-offset')}<dd>${a.dcOffset === null || a.dcOffset === undefined ? '–' : fmtNumber(a.dcOffset, 4)}</dd>
-        ${withHint('dt', 'RMS-nivå', 'rms-niva')}<dd>${a.rmsLevelDb === null || a.rmsLevelDb === undefined ? '–' : fmtNumber(a.rmsLevelDb) + ' dB'}</dd>
-        ${withHint('dt', 'Brusgolv', 'brusgolv')}<dd>${a.noiseFloorDb === null || a.noiseFloorDb === undefined ? '–' : fmtNumber(a.noiseFloorDb) + ' dB'}</dd>
-        ${withHint('dt', 'Samplingar i digitalt max', 'klippning')}<dd>${
-    a.absPeakCount === null || a.absPeakCount === undefined ? '–' : fmtInt(a.absPeakCount)
-  }${a.absPeakCount ? ' (kan betyda klippning eller hård limitering)' : ''}</dd>
-        ${isStereo ? renderStereoRow(l.stereo) : ''}
-      </dl>
+      ${renderDl(loudnessFields(data))}
       ${isStereo ? renderFilePhase(l.stereo) : ''}
       <div class="subsection">
         <h3>Ljudnivå</h3>
@@ -255,19 +305,12 @@ function renderFileSpectrogram(data) {
   const safeImg =
     typeof s.dataUri === 'string' && /^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(s.dataUri) ? s.dataUri : null;
 
-  const guess = s.lossySourceGuess || {};
-  // Only the actionable finding stays as text - a suspected lossy source. The
-  // spectrogram itself, plus the heading tooltip, cover the rest.
-  const lossyNote = guess.suspected
-    ? `<p class="note">${withHint('span', 'Möjlig lossy källa', 'lossy-kalla')}: frekvenserna kapas tvärt vid ~${fmtInt(
-        guess.cliffHz
-      )} Hz (${fmtNumber(guess.gapDb)} dB under fullbandsnivån) – typiskt för MP3/AAC. Ingen säker dom.</p>`
-    : '';
-
   // A long file's spectrogram only covers the analysed window; say so, but stay quiet
   // for a normal-length track where the window is the whole thing.
+  // Same comparison the server uses for loudness.stereo.windowTruncated, so the two
+  // notes about the same window can never disagree about whether it was truncated.
   const windowNote =
-    s.windowSeconds && data.format?.durationSec && data.format.durationSec > s.windowSeconds + 1
+    s.windowSeconds && data.format?.durationSec != null && data.format.durationSec > s.windowSeconds
       ? `<p class="note">Visar de första ${fmtDuration(s.windowSeconds, 0)}.</p>`
       : '';
 
@@ -276,7 +319,6 @@ function renderFileSpectrogram(data) {
       ${head}
       ${windowNote}
       ${safeImg ? `<img class="spectrogram" src="${safeImg}" alt="Spektrogram av filen" />` : '<p class="note">Ingen bild kunde skapas.</p>'}
-      ${lossyNote}
     </section>`;
 }
 
@@ -410,29 +452,17 @@ function buildFileCopyText(data) {
   const add = (s = '') => lines.push(s);
   const f = data.format || {};
   const l = data.loudness;
-  const a = l?.astats || {};
 
   add(`Filanalys: ${data.originalName || '(namnlös)'}`);
   add(`Genererad: ${fmtDateTime(new Date().toISOString())}`);
   add('');
+  // The same field lists the page renders, so the two can no longer disagree about
+  // which rows exist - the copy text used to quietly omit sample format, bit depth
+  // and cover art, and to print LRA without its low/high range.
   add('FIL');
-  add(`Container: ${f.container || '–'}`);
-  add(`Längd: ${fmtDuration(f.durationSec)}`);
-  if (f.taggedDurationSec != null) {
-    const diff = f.durationSec != null && fmtDuration(f.taggedDurationSec) !== fmtDuration(f.durationSec);
-    add(`Längd enligt TLEN-tagg: ${fmtDuration(f.taggedDurationSec)}${diff ? ' (skiljer sig från uppmätt)' : ''}`);
-  }
-  add(`Filstorlek: ${f.fileSizeBytes ? fmtInt(f.fileSizeBytes) + ' byte' : '–'}`);
-  add(`Bitrate (snitt): ${f.overallBitrateKbps ? fmtNumber(f.overallBitrateKbps) + ' kbit/s' : '–'}`);
-  add(`Encoder: ${f.encoder || '–'}`);
+  copyFields(add, fileOverviewFields(data));
   add('');
-  add('LJUDSPÅRET');
-  add(`Codec: ${data.audio?.codec || '–'}${data.audio?.profile ? ' (' + data.audio.profile + ')' : ''}`);
-  add(`Samplingsfrekvens: ${data.audio?.sampleRate ? fmtInt(data.audio.sampleRate) + ' Hz' : '–'}`);
-  add(`Kanaler: ${data.audio?.channels ?? '–'}`);
-  add(`Sampleformat: ${data.audioExtra?.sampleFmt || '–'}`);
-  if (a.bitDepthUsed != null) add(`Bitdjup: ${a.bitDepthContainer} deklarerat / ${a.bitDepthUsed} använda`);
-  add('');
+  addAudio(add, data.audio);
   if (Object.keys(f.tags || {}).length) {
     add('TAGGAR');
     Object.entries(f.tags).forEach(([k, v]) => add(`  ${tagLabel(k)}: ${v}`));
@@ -440,27 +470,10 @@ function buildFileCopyText(data) {
   }
   if (l) {
     add('LJUDNIVÅ OCH DYNAMIK');
-    if (l.truncated) add(`(första ${fmtDuration(l.analyzedSeconds)} av filen)`);
-    add(`Integrerad nivå: ${l.integratedLufs === null ? '–' : fmtNumber(l.integratedLufs) + ' LUFS'}`);
-    add(`LRA: ${l.lra === null ? '–' : fmtNumber(l.lra) + ' LU'}`);
-    add(`True peak: ${l.truePeakIsSilent ? '−∞ dBTP' : l.truePeakDbfs === null ? '–' : fmtNumber(l.truePeakDbfs) + ' dBTP'}`);
-    add(`Sample peak: ${l.samplePeakDbfs === null ? '–' : fmtNumber(l.samplePeakDbfs) + ' dBFS'}`);
-    add(`PLR: ${l.plr === null ? '–' : fmtNumber(l.plr) + ' LU'}`);
-    add(`Crest factor: ${a.crestFactor == null ? '–' : fmtNumber(a.crestFactor, 2)}`);
-    add(`DC-offset: ${a.dcOffset == null ? '–' : fmtNumber(a.dcOffset, 4)}`);
-    add(`RMS-nivå: ${a.rmsLevelDb == null ? '–' : fmtNumber(a.rmsLevelDb) + ' dB'}`);
-    add(`Brusgolv: ${a.noiseFloorDb == null ? '–' : fmtNumber(a.noiseFloorDb) + ' dB'}`);
-    add(`Samplingar i digitalt max: ${a.absPeakCount == null ? '–' : fmtInt(a.absPeakCount)}`);
-    if ((data.audio?.channels || 0) >= 2 && l.stereo) {
-      const s = l.stereo;
-      const v = stereoVerdict(s);
-      add(
-        s.correlation == null
-          ? 'Stereokorrelation: – (för lite ljud för att mäta)'
-          : `Stereokorrelation: ${fmtCorrelation(s.correlation)}${v ? ' – ' + v : ''}${
-              s.windowTruncated ? ` (första ${fmtDuration(s.windowSec, 0)})` : ''
-            }`
-      );
+    if (l.truncated) add(`(${truncationNote(l)})`);
+    copyFields(add, loudnessFields(data));
+    const s = (data.audio?.channels || 0) >= 2 ? l.stereo : null;
+    if (s) {
       const spans = [
         ...(s.outOfPhaseSpans || []).map((x) => `  Ur fas ${fmtDuration(x.startSec, 0)}–${x.endSec == null ? 'slutet' : fmtDuration(x.endSec, 0)}`),
         ...(s.dualMono ? [] : (s.monoSpans || []).map((x) => `  Mono ${fmtDuration(x.startSec, 0)}–${x.endSec == null ? 'slutet' : fmtDuration(x.endSec, 0)}`)),
@@ -470,16 +483,6 @@ function buildFileCopyText(data) {
         spans.forEach(add);
       }
     }
-    add('');
-  }
-  if (data.spectrogram?.lossySourceGuess) {
-    const g = data.spectrogram.lossySourceGuess;
-    add('SPEKTRUM');
-    add(
-      g.suspected
-        ? `Möjlig lossy källa: frekvensavskärning runt ${fmtInt(g.cliffHz)} Hz (${fmtNumber(g.gapDb)} dB gap).`
-        : `Ingen tydlig frekvensavskärning (${g.gapDb === null ? '–' : fmtNumber(g.gapDb) + ' dB gap'}).`
-    );
     add('');
   }
   const errKeys = Object.keys(data.errors || {});
@@ -515,15 +518,15 @@ async function analyzeFile(file) {
   const statusEl = document.getElementById('status');
   const resultsEl = document.getElementById('results');
 
-  // Take over #results from whatever was there.
+  // Take over #results from whatever was there: stop a log that is already polling,
+  // then claim the area so anything still in flight (including a log that has not
+  // polled yet) stops writing into it. See claimResults() in shared.js.
   if (typeof stopStreamLog === 'function') stopStreamLog();
-  if (typeof cancelAnalysis === 'function') cancelAnalysis();
-  const myToken = ++fileRunToken;
+  const myToken = claimResults();
 
   lastFileData = null;
   filePick?.classList.add('busy');
   resultsEl.innerHTML = '';
-  document.getElementById('analyzed-url-info').hidden = true;
   statusEl.textContent = `Analyserar ${file.name} …`;
 
   try {
@@ -533,7 +536,7 @@ async function analyzeFile(file) {
       body: file,
     });
     const body = await res.json();
-    if (myToken !== fileRunToken) return;
+    if (!ownsResults(myToken)) return;
     if (!res.ok) {
       resultsEl.innerHTML = renderFatalError(body.error || { message: 'Analysen misslyckades.', details: {} });
       return;
@@ -541,13 +544,13 @@ async function analyzeFile(file) {
     lastFileData = body;
     renderFileResult(body);
   } catch (err) {
-    if (myToken !== fileRunToken) return;
+    if (!ownsResults(myToken)) return;
     resultsEl.innerHTML = renderFatalError({ message: 'Kunde inte nå servern: ' + err.message, details: {} });
   } finally {
-    if (myToken === fileRunToken) {
-      statusEl.textContent = '';
-      filePick?.classList.remove('busy');
-    }
+    // The pick button belongs to the header, not to #results, so it is un-dimmed even
+    // when another view has taken over - otherwise it would stay greyed out for good.
+    filePick?.classList.remove('busy');
+    if (ownsResults(myToken)) statusEl.textContent = '';
   }
 }
 

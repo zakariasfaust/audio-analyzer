@@ -23,6 +23,7 @@ import { fetchIcyMetadata } from './icecast.js';
 import { readMemorySnapshot, evaluateJobCapacity } from './resourceGuard.js';
 import {
   envNumber,
+  MAX_CONCURRENT_FILE_JOBS,
   MAX_CONCURRENT_JOBS,
   MAX_UPLOAD_BYTES,
   REQUEST_DEADLINE_MS,
@@ -72,7 +73,11 @@ app.use(
     },
   })
 );
-app.use(express.json());
+// The only JSON body this app takes is {url}, so the limit is deliberately tiny. It is
+// spelled out rather than left at the 100 KB default because express answers an oversize
+// body through its own error handler, in its own shape - see the JSON-parse branch in
+// sendError(), which converts that back into this app's envelope.
+app.use(express.json({ limit: '16kb' }));
 app.use(express.static(PUBLIC_DIR));
 app.use(
   '/api',
@@ -93,47 +98,68 @@ app.use(
 // lifetime, so "legitimate use never approaches the limit" stopped being true the
 // day continuous logging shipped; several concurrent logs is the expected case).
 let activeJobs = 0;
-function jobGuard(req, res, next) {
-  // Reading memory is a virtual-procfs read (or a no-op RSS lookup) - cheap, but
-  // pointless when the count alone would already reject, so it only runs when the
-  // count check would otherwise let the request through.
-  const memorySnapshot = activeJobs < MAX_CONCURRENT_JOBS ? readMemorySnapshot() : null;
-  const decision = evaluateJobCapacity({
-    activeJobs,
-    maxConcurrentJobs: MAX_CONCURRENT_JOBS,
-    memorySnapshot,
-    memoryRatioThreshold: MEMORY_RATIO_THRESHOLD,
-    maxRssBytes: MAX_RSS_BYTES,
-  });
+// File analyses are counted a second time, against their own much smaller ceiling. A
+// stream job costs a 15-second recording; a file job holds up to MAX_UPLOAD_BYTES of
+// temp disk for minutes, so the 12 slots sized for stream logs are the wrong budget for
+// it - see MAX_CONCURRENT_FILE_JOBS.
+let activeFileJobs = 0;
 
-  if (!decision.allowed) {
-    // The one piece of observability the 2026-09-03 OOM postmortem flagged as
-    // wanted and never built: exactly why a request was turned away, on demand
-    // rather than as a constant-noise timer.
-    console.warn(`jobGuard: avvisade begäran (${decision.reason})`, decision.detail);
-    res.set('Retry-After', '10');
-    res.status(503).json({
-      error: {
-        code: 'BUSY',
-        message: 'Servern kör redan så många analyser den tar samtidigt. Försök igen om en liten stund.',
-        // Not read by the client - it only branches on the code above - but worth
-        // having in the response for anyone debugging with the network tab open.
-        details: { reason: decision.reason },
-      },
-    });
-    return;
-  }
-  activeJobs++;
-  let released = false;
-  const release = () => {
-    if (released) return;
-    released = true;
-    activeJobs--;
+function makeJobGuard({ isFileJob = false } = {}) {
+  return function jobGuard(req, res, next) {
+    // Reading memory is a virtual-procfs read (or a no-op RSS lookup) - cheap, but
+    // pointless when a count alone would already reject, so it only runs when the
+    // count checks would otherwise let the request through.
+    const countWouldPass = activeJobs < MAX_CONCURRENT_JOBS && !(isFileJob && activeFileJobs >= MAX_CONCURRENT_FILE_JOBS);
+    const memorySnapshot = countWouldPass ? readMemorySnapshot() : null;
+    const decision =
+      isFileJob && activeFileJobs >= MAX_CONCURRENT_FILE_JOBS
+        ? {
+            allowed: false,
+            reason: 'file-concurrency',
+            detail: { activeFileJobs, maxConcurrentFileJobs: MAX_CONCURRENT_FILE_JOBS },
+          }
+        : evaluateJobCapacity({
+            activeJobs,
+            maxConcurrentJobs: MAX_CONCURRENT_JOBS,
+            memorySnapshot,
+            memoryRatioThreshold: MEMORY_RATIO_THRESHOLD,
+            maxRssBytes: MAX_RSS_BYTES,
+          });
+
+    if (!decision.allowed) {
+      // The one piece of observability the 2026-09-03 OOM postmortem flagged as
+      // wanted and never built: exactly why a request was turned away, on demand
+      // rather than as a constant-noise timer.
+      console.warn(`jobGuard: avvisade begäran (${decision.reason})`, decision.detail);
+      res.set('Retry-After', '10');
+      res.status(503).json({
+        error: {
+          code: 'BUSY',
+          message: 'Servern kör redan så många analyser den tar samtidigt. Försök igen om en liten stund.',
+          // Not read by the client - it only branches on the code above - but worth
+          // having in the response for anyone debugging with the network tab open.
+          details: { reason: decision.reason },
+        },
+      });
+      return;
+    }
+    activeJobs++;
+    if (isFileJob) activeFileJobs++;
+    let released = false;
+    const release = () => {
+      if (released) return;
+      released = true;
+      activeJobs--;
+      if (isFileJob) activeFileJobs--;
+    };
+    res.on('finish', release);
+    res.on('close', release);
+    next();
   };
-  res.on('finish', release);
-  res.on('close', release);
-  next();
 }
+
+const jobGuard = makeJobGuard();
+const fileJobGuard = makeJobGuard({ isFileJob: true });
 
 // -----------------------------------------------------------------------
 // Error responses: maps our own error classes (see analyzer.js) to HTTP status
@@ -160,6 +186,21 @@ const STATUS_BY_CODE = {
 };
 
 function sendError(res, err) {
+  // body-parser rejects a malformed or oversize JSON body with its own error, which
+  // would otherwise reach the client as express's HTML error page - the frontend calls
+  // res.json() on every response, so it would read as "could not reach the server"
+  // rather than as the validation failure it is.
+  if (err?.type === 'entity.too.large' || err?.type === 'entity.parse.failed') {
+    const tooLarge = err.type === 'entity.too.large';
+    res.status(tooLarge ? 413 : 400).json({
+      error: {
+        code: tooLarge ? 'UPLOAD_REJECTED' : 'VALIDATION_ERROR',
+        message: tooLarge ? 'Förfrågan är för stor.' : 'Förfrågans JSON gick inte att tolka.',
+        details: {},
+      },
+    });
+    return;
+  }
   if (err instanceof AppError) {
     const status = STATUS_BY_CODE[err.code] || 500;
     res.status(status).json({
@@ -254,7 +295,7 @@ app.get(
 // decoding a full track is minutes, not the ~90 s a stream analysis needs.
 app.post(
   '/api/analyze-file',
-  jobGuard,
+  fileJobGuard,
   withRequestAbort(
     async (req, res, signal) => {
       const tempFile = path.join(os.tmpdir(), `audio-analyzer-upload-${randomUUID()}`);
@@ -274,6 +315,48 @@ app.use('/api', (req, res) => {
   // envelope - same {error:{code,message}} shape, one place that decides it.
   sendError(res, new AppError('NOT_FOUND', `Okänd API-route: ${req.path}`));
 });
+
+// Anything that reaches express's own error path rather than a route's try/catch -
+// in practice a body-parser rejection, which happens before any handler runs. Without
+// this it would be answered with express's HTML error page, and the frontend (which
+// calls res.json() on every response) would report it as the server being unreachable.
+// eslint-disable-next-line no-unused-vars -- express identifies an error handler by arity
+app.use((err, req, res, next) => {
+  if (res.headersSent) return;
+  sendError(res, err);
+});
+
+// Every temp file this app writes is deleted in a `finally` - which does not run when
+// the process is killed outright, and this one has been OOM-killed before. Without a
+// sweep those files stay in the system temp directory for good: uploaded masters and
+// recorded stream samples, on disk, indefinitely. An hour is far past any live job
+// (the longest deadline is 11 minutes), so nothing in flight is ever caught by this.
+const TEMP_FILE_MAX_AGE_MS = 60 * 60 * 1000;
+
+async function sweepStaleTempFiles() {
+  const dir = os.tmpdir();
+  const cutoff = Date.now() - TEMP_FILE_MAX_AGE_MS;
+  let removed = 0;
+  try {
+    for (const name of await fs.readdir(dir)) {
+      if (!name.startsWith('audio-analyzer-')) continue;
+      const full = path.join(dir, name);
+      try {
+        const stat = await fs.stat(full);
+        if (stat.mtimeMs < cutoff) {
+          await fs.unlink(full);
+          removed++;
+        }
+      } catch {
+        // Gone already, or owned by another instance sharing this tmpdir - skip it.
+      }
+    }
+  } catch (err) {
+    console.warn(`Kunde inte städa temporärfiler i ${dir}: ${err.message}`);
+    return;
+  }
+  if (removed) console.log(`Städade ${removed} kvarglömd(a) temporärfil(er) från ${dir}.`);
+}
 
 // A single stray rejection anywhere in the analysis chain would otherwise take the
 // whole process down and drop every in-flight request with it. Log and keep serving;
@@ -304,7 +387,9 @@ const server = app.listen(PORT, HOST, async () => {
     boot.source === 'rss'
       ? `minneskälla=rss, gräns=${MAX_CONCURRENT_JOBS} jobb, RSS-tak=${Math.round(MAX_RSS_BYTES / 1024 / 1024)} MB`
       : `minneskälla=${boot.source}, gräns=${MAX_CONCURRENT_JOBS} jobb, minneströskel=${Math.round(MEMORY_RATIO_THRESHOLD * 100)}%`;
-  console.log(`Resursvakt: ${memoryLine}`);
+  console.log(`Resursvakt: ${memoryLine}, varav ${MAX_CONCURRENT_FILE_JOBS} filanalyser`);
+
+  await sweepStaleTempFiles();
 
   const [hasFfmpeg, hasFfprobe] = await Promise.all([
     checkBinaryAvailable('ffmpeg'),

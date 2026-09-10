@@ -217,7 +217,7 @@ const STREAM_TERMS = {
   sampleformat:
     'Hur varje sampling lagras internt, t.ex. s16 (16-bitars heltal), s32 (32-bitars heltal) eller fltp (32-bitars flyttal). Säger inte alltid hur många bitar som faktiskt används, se Bitdjup.',
   bitdjup:
-    'Hur många bitars upplösning ljudet har. "Deklarerat" är vad containern anger; "faktiskt använda" är hur många bitar datan verkligen rör sig i. Är de olika är filen uppsamplad eller utfylld med nollor, t.ex. en 16-bitars inspelning sparad som 24-bitars.',
+    'Hur många bitars upplösning ljudet har. "Deklarerat" är vad filen anger; "faktiskt använda" är hur många bitar datan verkligen rör sig i. Är de olika är filen uppsamplad eller utfylld med nollor, t.ex. en 16-bitars inspelning sparad som 24-bitars. Gäller bara heltals-PCM (WAV, FLAC, AIFF): en MP3 eller AAC har inget bitdjup alls utan avkodas till flyttal, och då visas ingen siffra.',
   encoder:
     'Programmet och ofta versionen som skapade filen, ur en tagg som "LAME3.100" eller "libFLAC 1.4.2". Kan avslöja hur filen har bearbetats.',
   replaygain:
@@ -244,7 +244,5 @@ const STREAM_TERMS = {
   fas:
     'Partier där kanalerna antingen motverkar varandra ("ur fas") eller är helt identiska ("mono"), med start och sluttid. Tystnad har räknats bort, så det som listas är verkliga partier med ljud. "Ur fas" är det som är värt att åtgärda: signalen tunnas ut eller försvinner när ljudet summeras till mono. "Mono" mitt i en i övrigt bred mix kan vara avsiktligt (mono-intro, centrerad sång) eller ett spår som råkat renderas som dubbelmono.',
   spektrogram:
-    'En bild av vilka frekvenser (lodrätt) som finns vid varje tidpunkt (vågrätt), starkare färg = mer energi. En skarp vågrät kant högt upp betyder att inget alls spelas in ovanför den frekvensen.',
-  'lossy-kalla':
-    'Lossy-kodning (MP3, AAC) kapar de högsta frekvenserna hårt – vid 128 kbit/s runt 16 kHz. Ser vi en sådan tvär avskärning i en FLAC eller WAV är filen troligen gjord från en lossy källa. Det är en indikation, inte ett bevis: även avsiktlig mastering och gammalt/dovt material kan se likadant ut.',
+    'En bild av vilka frekvenser (lodrätt) som finns vid varje tidpunkt (vågrätt), starkare färg = mer energi. En skarp, spikrak vågrät kant högt upp är signaturen för lossy-kodning: MP3/AAC kapar tvärt, runt 16 kHz vid 128 kbit/s och runt 19–20 kHz vid 320 kbit/s. Ser du en sådan kant i en FLAC eller WAV är filen troligen gjord från en lossy källa – men bedöm det på bilden, en dov mastring eller gammalt material rullar av mjukt och betyder inget sådant.',
 };

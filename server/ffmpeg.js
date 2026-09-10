@@ -16,6 +16,7 @@ import { randomUUID } from 'node:crypto';
 
 import {
   CHILD_SIGKILL_GRACE_MS,
+  FFPROBE_FILE_TIMEOUT_MS,
   FILE_ANALYSIS_MAX_SECONDS,
   FILE_ANALYSIS_MAX_STDERR_BYTES,
   FILE_ANALYSIS_TIMEOUT_MS,
@@ -45,8 +46,16 @@ function runChildProcess(command, args, { timeoutMs = TIMEOUT_MS, signal, maxOut
       return;
     }
 
-    let stdout = '';
-    let stderr = '';
+    // Buffers, not a growing string. `stdout += chunk` decodes each chunk on its own,
+    // so a multi-byte UTF-8 sequence split across a pipe boundary becomes U+FFFD -
+    // silent corruption in exactly the values a person reads (an "å" in an ID3 artist
+    // tag, say), which JSON.parse then accepts without complaint. Concatenating the
+    // bytes first and decoding once cannot split a character. It also makes the cap
+    // below a real byte cap, rather than a UTF-16 length compared against a byte count.
+    const stdoutChunks = [];
+    const stderrChunks = [];
+    let stdoutBytes = 0;
+    let stderrBytes = 0;
     let stdoutCapped = false;
     let stderrCapped = false;
     let timedOut = false;
@@ -79,12 +88,16 @@ function runChildProcess(command, args, { timeoutMs = TIMEOUT_MS, signal, maxOut
     });
 
     child.stdout?.on('data', (chunk) => {
-      if (stdout.length + chunk.length <= maxOutputBytes) stdout += chunk;
-      else stdoutCapped = true;
+      if (stdoutBytes + chunk.length <= maxOutputBytes) {
+        stdoutChunks.push(chunk);
+        stdoutBytes += chunk.length;
+      } else stdoutCapped = true;
     });
     child.stderr?.on('data', (chunk) => {
-      if (stderr.length + chunk.length <= maxOutputBytes) stderr += chunk;
-      else stderrCapped = true;
+      if (stderrBytes + chunk.length <= maxOutputBytes) {
+        stderrChunks.push(chunk);
+        stderrBytes += chunk.length;
+      } else stderrCapped = true;
     });
 
     child.on('close', (code, sig) => {
@@ -94,7 +107,15 @@ function runChildProcess(command, args, { timeoutMs = TIMEOUT_MS, signal, maxOut
         return;
       }
       if ((sig === 'SIGTERM' || sig === 'SIGKILL') && code === null) timedOut = true;
-      resolve({ code, signal: sig, stdout, stderr, timedOut, stdoutCapped, stderrCapped });
+      resolve({
+        code,
+        signal: sig,
+        stdout: Buffer.concat(stdoutChunks).toString('utf8'),
+        stderr: Buffer.concat(stderrChunks).toString('utf8'),
+        timedOut,
+        stdoutCapped,
+        stderrCapped,
+      });
     });
   });
 }
@@ -181,7 +202,10 @@ export async function runFfprobeFile(filePath, { signal } = {}) {
     filePath,
   ];
 
-  const { code, stdout, stderr, timedOut } = await runChildProcess('ffprobe', args, { signal });
+  const { code, stdout, stderr, timedOut } = await runChildProcess('ffprobe', args, {
+    timeoutMs: FFPROBE_FILE_TIMEOUT_MS,
+    signal,
+  });
 
   if (timedOut) throw new TimeoutError(filePath);
   if (code !== 0) throw new FfprobeError(stderr);
@@ -404,7 +428,7 @@ export async function measureLoudness(filePath, { signal } = {}) {
 // A stream gets a 15s sample; an uploaded file is finite, so it gets measured
 // whole (up to FILE_ANALYSIS_MAX_SECONDS). Two decode passes, run in parallel by
 // server/file.js: measureFileLoudness (loudness curve + astats + phase) and
-// renderSpectrogram (the image + the lossy-source band check). Everything is
+// analyzeSpectrum (the image + the mid/side levels). Everything is
 // parsed from stderr, the same way Fas 3 reads ebur128 - these filters have no
 // JSON form.
 // ---------------------------------------------------------------------------
@@ -705,35 +729,19 @@ export async function measureFileLoudness(filePath, { signal, durationSec = null
   };
 }
 
-// The gap between full-band RMS and the RMS of everything above 16 kHz. A large
-// gap means almost nothing lives up there - a hard ceiling typical of a lossy
-// encode (MP3 at 128 kbps cuts near 16 kHz). Real 44.1 kHz content rolls off near
-// 20-22 kHz on its own, so a gap alone at that edge is not enough - only a cliff
-// this low is called, and only ever "suspected", never certain.
-export const LOSSY_CLIFF_GAP_DB = 45;
-export function detectLossyCliff(fullBandRmsDb, highBandRmsDb) {
-  if (typeof fullBandRmsDb !== 'number' || typeof highBandRmsDb !== 'number') {
-    return { suspected: false, cliffHz: null, gapDb: null };
-  }
-  const gapDb = Number((fullBandRmsDb - highBandRmsDb).toFixed(1));
-  const suspected = gapDb >= LOSSY_CLIFF_GAP_DB;
-  return { suspected, cliffHz: suspected ? 16000 : null, gapDb };
-}
-
-// Given the astats RMS levels from analyzeSpectrum's four branches in declaration
-// order [full, high-pass, mid, side], sanity-check the ordering and, if it holds,
-// return the mid & side levels for a correlation estimate. The check: the
-// full-band branch must be the loudest - it carries all the energy, while the
-// high-pass is filtered and mid/side are each a component of it. If ffmpeg emitted
-// the astats blocks in some other order, that no longer holds, and we return nulls
-// rather than a correlation with a possibly-flipped sign.
-function midSideFromBranchLevels([full, hp, mid, side]) {
+// Given the astats RMS levels from analyzeSpectrum's three branches in declaration
+// order [full, mid, side], sanity-check the ordering and, if it holds, return the
+// mid & side levels for a correlation estimate. The check: the full-band branch must
+// be the loudest - it carries all the energy, while mid and side are each a component
+// of it. If ffmpeg emitted the astats blocks in some other order, that no longer
+// holds, and we return nulls rather than a correlation with a possibly-flipped sign.
+function midSideFromBranchLevels([full, mid, side]) {
   // full must be present, and at least one of mid/side (the other being -inf/null
   // is meaningful: mid null = perfect anti-phase, side null = identical channels).
   if (typeof full !== 'number' || (typeof mid !== 'number' && typeof side !== 'number')) {
     return { midRmsDb: null, sideRmsDb: null };
   }
-  const others = [hp, mid, side].filter((v) => typeof v === 'number');
+  const others = [mid, side].filter((v) => typeof v === 'number');
   if (others.length && full < Math.max(...others) - 0.5) return { midRmsDb: null, sideRmsDb: null };
   return {
     midRmsDb: typeof mid === 'number' ? mid : null,
@@ -742,13 +750,11 @@ function midSideFromBranchLevels([full, hp, mid, side]) {
 }
 
 /**
- * The second decode pass, over a short representative window: a spectrogram PNG,
- * the high-frequency band check behind the "consistent with a lossy source" flag,
- * and the mid/side levels for the stereo-correlation estimate. One decode, since
- * an encoder's frequency ceiling and a mix's overall width are both near-constant
- * across a track.
+ * The second decode pass, over a short representative window: a spectrogram PNG and
+ * the mid/side levels for the stereo-correlation estimate. One decode, since a mix's
+ * overall width is near-constant across a track.
  *
- * → { dataUri, windowSeconds, lossySourceGuess, midRmsDb, sideRmsDb } | null
+ * → { dataUri, windowSeconds, midRmsDb, sideRmsDb } | null
  */
 export async function analyzeSpectrum(filePath, { signal } = {}) {
   const tempPng = path.join(os.tmpdir(), `audio-analyzer-spec-${randomUUID()}.png`);
@@ -767,10 +773,9 @@ export async function analyzeSpectrum(filePath, { signal } = {}) {
       // the frame and `aformat=channel_layouts=mono` there silently corrupts the
       // pan branches below it. showspectrumpic renders stereo directly (channels
       // stacked), which is more useful anyway.
-      '[0:a]asplit=5[img][full][hp][mid][side];' +
+      '[0:a]asplit=4[img][full][mid][side];' +
         '[img]showspectrumpic=s=1024x512:legend=1:scale=log:color=intensity[pic];' +
         '[full]astats=metadata=0,anullsink;' +
-        '[hp]highpass=f=16000:poles=2,astats=metadata=0,anullsink;' +
         '[mid]pan=mono|c0=0.5*c0+0.5*c1,astats=metadata=0,anullsink;' +
         '[side]pan=mono|c0=0.5*c0-0.5*c1,astats=metadata=0,anullsink',
       '-map', '[pic]',
@@ -796,19 +801,17 @@ export async function analyzeSpectrum(filePath, { signal } = {}) {
     if (!dataUri && code !== 0) throw new FfmpegError(stderr, 'ffmpeg kunde inte rendera ett spektrogram.');
 
     // ffmpeg prints the filter summaries in reverse of declaration order, so the
-    // stderr blocks appear [side, mid, hp, full]; reverse back to declaration order.
+    // stderr blocks appear [side, mid, full]; reverse back to declaration order.
     const tagsInStderrOrder = [...new Set([...String(stderr).matchAll(/\[(Parsed_astats_\d+) @/g)].map((x) => x[1]))];
     const branchLevels = tagsInStderrOrder
       .reverse()
-      .map((tag) => astatsFieldsForTag(stderr, tag)?.rmsLevelDb ?? null); // [full, hp, mid, side]
+      .map((tag) => astatsFieldsForTag(stderr, tag)?.rmsLevelDb ?? null); // [full, mid, side]
 
-    const [fullRms, hpRms] = branchLevels;
     const { midRmsDb, sideRmsDb } = midSideFromBranchLevels(branchLevels);
 
     return {
       dataUri,
       windowSeconds: SPECTROGRAM_MAX_SECONDS,
-      lossySourceGuess: detectLossyCliff(fullRms, hpRms),
       midRmsDb,
       sideRmsDb,
     };

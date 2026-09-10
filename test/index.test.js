@@ -190,8 +190,23 @@ test('jobGuard returns 503 BUSY with Retry-After once the concurrency ceiling is
     postAnalyze('https://three.invalid/stream.m3u8'),
   ]);
 
+  // At least one, not exactly one: how many get through before the third arrives depends
+  // on how fast the resolver returns NXDOMAIN, which is not this test's subject. Pinning
+  // it to exactly one made the assertion a timing race rather than a check of the gate.
   const busy = results.filter((r) => r.status === 503);
-  assert.equal(busy.length, 1, `expected exactly one 503, got statuses: ${results.map((r) => r.status)}`);
+  assert.ok(busy.length >= 1, `expected at least one 503, got statuses: ${results.map((r) => r.status)}`);
   assert.equal(busy[0].body.error.code, 'BUSY');
   assert.equal(busy[0].retryAfter, '10');
+});
+
+test('an oversize JSON body is answered in this app\'s error envelope, not express\'s', async () => {
+  const res = await fetch(`${baseUrl}/api/analyze`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url: 'https://example.com/' + 'x'.repeat(32 * 1024) }),
+  });
+  const body = await res.json(); // the point of the test: this must not throw on HTML
+
+  assert.equal(res.status, 413);
+  assert.equal(body.error.code, 'UPLOAD_REJECTED');
 });

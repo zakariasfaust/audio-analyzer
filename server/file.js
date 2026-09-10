@@ -4,14 +4,14 @@
 // a temp file, calls analyzeAudioFile(), and deletes the temp file afterwards.
 //
 // One ffprobe (all the metadata the file declares) plus two decode passes run in
-// parallel (loudness curve + astats + phase; spectrogram + lossy-source check) -
-// see measureFileLoudness / renderSpectrogram in ffmpeg.js. Each pass is isolated:
+// parallel (loudness curve + astats + phase; spectrogram + mid/side levels) -
+// see measureFileLoudness / analyzeSpectrum in ffmpeg.js. Each pass is isolated:
 // a failure in one lands in errors.<step> and the rest of the result still stands,
 // the same degradation pattern analyze() uses.
 
 import { createWriteStream } from 'node:fs';
 
-import { MAX_UPLOAD_BYTES } from './config.js';
+import { MAX_UPLOAD_BYTES, UPLOAD_IDLE_TIMEOUT_MS } from './config.js';
 import { FfprobeError, NotAudioFileError, RequestAbortedError, UploadRejectedError } from './errors.js';
 import { analyzeSpectrum, estimateCorrelation, measureFileLoudness, runFfprobeFile, simplifyProbeResult } from './ffmpeg.js';
 
@@ -42,8 +42,14 @@ export function sanitizeUploadName(raw) {
  * Streams the request body to `filePath`, rejecting once more than `maxBytes` have
  * arrived. Nothing is held in memory - a hostile 10 GB upload costs one aborted
  * connection and a partial temp file (which the route deletes), not the process.
+ *
+ * Also rejects an upload that goes quiet for `idleMs`. The route holds a job slot for
+ * the whole upload, and its deadline is sized for the decode that follows (minutes), so
+ * without this a few deliberately stalled connections could occupy every file slot for
+ * that entire window. The timer is reset by each chunk, so a slow-but-progressing
+ * upload of a large master is never the thing this catches.
  */
-export function saveRequestBodyToFile(req, filePath, maxBytes = MAX_UPLOAD_BYTES, signal) {
+export function saveRequestBodyToFile(req, filePath, maxBytes = MAX_UPLOAD_BYTES, signal, idleMs = UPLOAD_IDLE_TIMEOUT_MS) {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) {
       reject(signal.reason instanceof Error ? signal.reason : new RequestAbortedError());
@@ -52,11 +58,13 @@ export function saveRequestBodyToFile(req, filePath, maxBytes = MAX_UPLOAD_BYTES
 
     let written = 0;
     let settled = false;
+    let idleTimer = null;
     const out = createWriteStream(filePath);
 
     const finish = (fn, arg) => {
       if (settled) return;
       settled = true;
+      if (idleTimer) clearTimeout(idleTimer);
       signal?.removeEventListener?.('abort', onAbort);
       fn(arg);
     };
@@ -77,8 +85,28 @@ export function saveRequestBodyToFile(req, filePath, maxBytes = MAX_UPLOAD_BYTES
 
     signal?.addEventListener?.('abort', onAbort, { once: true });
 
+    // A stalled upload is the client's doing, so the socket goes with it - unlike the
+    // size and empty-body rejections below, which still need it open to answer on.
+    const armIdleTimer = () => {
+      if (!idleMs || settled) return;
+      if (idleTimer) clearTimeout(idleTimer);
+      idleTimer = setTimeout(
+        () =>
+          fail(
+            new UploadRejectedError(`Uppladdningen stannade av i mer än ${Math.round(idleMs / 1000)} sekunder.`, {
+              idleMs,
+            }),
+            { destroyRequest: true }
+          ),
+        idleMs
+      );
+      idleTimer.unref?.();
+    };
+    armIdleTimer();
+
     req.on('data', (chunk) => {
       written += chunk.length;
+      armIdleTimer();
       if (written > maxBytes) {
         fail(
           new UploadRejectedError(
@@ -224,6 +252,7 @@ export async function analyzeAudioFile(filePath, originalName, { signal } = {}) 
   }
 
   const format = buildFileFormat(probe.raw);
+  const audio = simplifyProbeResult(probe.raw);
   const errors = {};
 
   const [loudness, spectrum] = await Promise.all([
@@ -245,40 +274,36 @@ export async function analyzeAudioFile(filePath, originalName, { signal } = {}) 
     ),
   ]);
 
-  const isStereo = simplifyProbeResult(probe.raw).channels >= 2;
-
-  // Stereo picture: the correlation number comes from analyzeSpectrum's mid/side
-  // levels (window-limited, silence-immune - see estimateCorrelation), the phase
-  // spans from measureFileLoudness's whole-file, silence-gated aphasemeter run.
-  let stereo = null;
-  if (isStereo && loudness) {
-    const correlation = spectrum ? estimateCorrelation(spectrum.midRmsDb, spectrum.sideRmsDb) : null;
-    stereo = {
-      correlation,
-      // "identical channels" - side at -inf, or a correlation that has locked to +1.
-      dualMono: correlation !== null && correlation >= 0.999,
-      windowSec: spectrum?.windowSeconds ?? null,
-      windowTruncated: Boolean(spectrum && format.durationSec != null && format.durationSec > spectrum.windowSeconds),
-      monoSpans: loudness.phase?.monoSpans ?? [],
-      outOfPhaseSpans: loudness.phase?.outOfPhaseSpans ?? [],
-    };
-  }
-  if (loudness) loudness.stereo = stereo;
-
   return {
     kind: 'file',
     originalName: originalName || null,
     format,
-    audio: simplifyProbeResult(probe.raw),
+    audio,
     audioExtra: buildAudioExtra(probe.raw),
-    loudness,
-    spectrogram: spectrum
-      ? {
-          dataUri: spectrum.dataUri,
-          windowSeconds: spectrum.windowSeconds,
-          lossySourceGuess: spectrum.lossySourceGuess,
-        }
-      : null,
+    // Composed rather than assigned onto the object measureFileLoudness returned, so
+    // the shape of `loudness` is described in one place instead of grown in two.
+    loudness: loudness ? { ...loudness, stereo: buildStereo(audio, format, loudness, spectrum) } : null,
+    spectrogram: spectrum ? { dataUri: spectrum.dataUri, windowSeconds: spectrum.windowSeconds } : null,
     errors,
+  };
+}
+
+/**
+ * The stereo picture, or null for a mono file. The correlation number comes from
+ * analyzeSpectrum's mid/side levels (window-limited, silence-immune - see
+ * estimateCorrelation); the phase spans from measureFileLoudness's whole-file,
+ * silence-gated aphasemeter run.
+ */
+function buildStereo(audio, format, loudness, spectrum) {
+  if (!(audio.channels >= 2)) return null;
+  const correlation = spectrum ? estimateCorrelation(spectrum.midRmsDb, spectrum.sideRmsDb) : null;
+  return {
+    correlation,
+    // "identical channels" - side at -inf, or a correlation that has locked to +1.
+    dualMono: correlation !== null && correlation >= 0.999,
+    windowSec: spectrum?.windowSeconds ?? null,
+    windowTruncated: Boolean(spectrum && format.durationSec != null && format.durationSec > spectrum.windowSeconds),
+    monoSpans: loudness.phase?.monoSpans ?? [],
+    outOfPhaseSpans: loudness.phase?.outOfPhaseSpans ?? [],
   };
 }

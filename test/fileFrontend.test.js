@@ -107,7 +107,6 @@ const baseData = () => ({
   spectrogram: {
     dataUri: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUg==',
     windowSeconds: 600,
-    lossySourceGuess: { suspected: false, cliffHz: null, gapDb: 12.4 },
   },
   errors: {},
 });
@@ -145,6 +144,31 @@ test('renderFileOverview: a TLEN that disagrees with the real duration is flagge
   const html = app.renderFileOverview(d);
   assert.match(html, /skiljer sig från filens uppmätta längd/);
   assert.match(html, /tag-mismatch/);
+});
+
+// astats' bit-depth reading describes the decoder's output buffer. That is the file
+// only for integer PCM; for anything decoded to float it is ffmpeg's own buffer, and
+// the numbers are unstable as well as meaningless - a 192 kbps MP3 came back as
+// "43 bitar deklarerat, 41 faktiskt använda" through this app's own filter chain.
+test('renderFileOverview reports bit depth only for integer PCM', () => {
+  const d = baseData();
+  d.audioExtra.sampleFmt = 's16';
+  d.loudness.astats.bitDepthContainer = 16;
+  d.loudness.astats.bitDepthUsed = 14;
+  assert.match(app.renderFileOverview(d), /16 bitar deklarerat, 14 faktiskt använda/);
+
+  d.loudness.astats.bitDepthUsed = 16;
+  assert.match(app.renderFileOverview(d), /<dd>16 bitar<\/dd>/);
+});
+
+test('renderFileOverview states that a float-decoded source has no bit depth', () => {
+  const d = baseData();
+  d.audioExtra.sampleFmt = 'fltp';
+  d.loudness.astats.bitDepthContainer = 43; // what ffmpeg actually reports for an mp3
+  d.loudness.astats.bitDepthUsed = 41;
+  const html = app.renderFileOverview(d);
+  assert.match(html, /gäller inte \(fltp – flyttal\)/);
+  assert.ok(!/43 bitar/.test(html), 'the decoder buffer size leaked out as a bit depth');
 });
 
 test('renderFileOverview escapes hostile tag values - no markup injection', () => {
@@ -249,12 +273,15 @@ test('renderFileSpectrogram only emits the image when the data URI is a real png
   assert.match(bad, /Ingen bild/);
 });
 
-test('renderFileSpectrogram flags a suspected lossy source with the cliff frequency', () => {
-  const d = baseData();
-  d.spectrogram.lossySourceGuess = { suspected: true, cliffHz: 16000, gapDb: 58.2 };
-  const html = app.renderFileSpectrogram(d);
-  assert.match(html, /16\s*000 Hz|16000 Hz/);
-  assert.match(html, /lossy källa/i);
+// The spectrogram section makes no claim about the file any more - the removed
+// lossy-source flag was the only one, and it was measurably wrong in both directions
+// (see the note in fileAnalysis.test.js). The image and the window note are all there is.
+// (The word "lossy" still appears in the heading's tooltip, which teaches the reader to
+// spot a cliff themselves - that is the explanation, not a verdict about this file.)
+test('renderFileSpectrogram states nothing beyond the image and the window note', () => {
+  const html = app.renderFileSpectrogram(baseData());
+  assert.ok(!/Möjlig lossy källa/i.test(html), 'the removed lossy-source verdict is back');
+  assert.ok(!/\bgap\b/i.test(html), 'the removed gap-in-dB claim is back');
 });
 
 test('buildFileCopyText produces a plain-text report with the main sections', () => {
@@ -262,15 +289,27 @@ test('buildFileCopyText produces a plain-text report with the main sections', ()
   assert.match(text, /^Filanalys: song\.flac/m);
   assert.match(text, /^LJUDNIVÅ OCH DYNAMIK$/m);
   assert.match(text, /Integrerad nivå: [-−]14,2 LUFS/);
-  assert.match(text, /LRA: 6,1 LU/);
+  assert.match(text, /Loudness range \(LRA\): 6,1 LU/);
   assert.ok(!text.includes('TLEN')); // no TLEN tag in baseData
+});
+
+// The copy text is generated from the same field lists the page renders (see field()
+// in shared.js), so every row the page shows has to be in it. These four used to be
+// missing purely because the text version was written out by hand a second time.
+test('buildFileCopyText carries the rows the page shows, with the same labels', () => {
+  const text = app.buildFileCopyText(baseData());
+  assert.match(text, /Sampleformat: s32/);
+  assert.match(text, /Bitdjup: /);
+  assert.match(text, /Omslagsbild: 500×500 px \(mjpeg\)/);
+  // The LRA low/high range used to be dropped from the text version only.
+  assert.match(text, /Loudness range \(LRA\): 6,1 LU \([-−]18,0 … [-−]11,9 LUFS\)/);
 });
 
 test('buildFileCopyText notes a TLEN mismatch', () => {
   const d = baseData();
   d.format.durationSec = 199;
   d.format.taggedDurationSec = 165;
-  assert.match(app.buildFileCopyText(d), /Längd enligt TLEN-tagg: .*\(skiljer sig från uppmätt\)/);
+  assert.match(app.buildFileCopyText(d), /Längd enligt tagg \(TLEN\): .*skiljer sig från filens uppmätta längd/);
 });
 
 test('buildFileCopyText carries partial-result errors', () => {

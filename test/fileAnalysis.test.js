@@ -15,8 +15,6 @@ import {
   gatePhasingBySilence,
   subtractIntervals,
   estimateCorrelation,
-  detectLossyCliff,
-  LOSSY_CLIFF_GAP_DB,
 } from '../server/ffmpeg.js';
 import { sanitizeUploadName, buildFileFormat, buildAudioExtra } from '../server/file.js';
 
@@ -289,33 +287,15 @@ test('estimateCorrelation: nothing to measure -> null', () => {
   assert.equal(estimateCorrelation(null, null), null);
 });
 
-// --------------------------------------------------------------------------
-// detectLossyCliff
-// --------------------------------------------------------------------------
-
-test('detectLossyCliff flags a wide gap between full-band and >16kHz RMS', () => {
-  const guess = detectLossyCliff(-28.5, -91.0);
-  assert.equal(guess.suspected, true);
-  assert.equal(guess.cliffHz, 16000);
-  assert.equal(guess.gapDb, 62.5);
-});
-
-test('detectLossyCliff does not flag a modest gap (real broadband content)', () => {
-  const guess = detectLossyCliff(-20.0, -34.3);
-  assert.equal(guess.suspected, false);
-  assert.equal(guess.cliffHz, null);
-  assert.equal(guess.gapDb, 14.3);
-});
-
-test('detectLossyCliff is inconclusive without both band readings', () => {
-  assert.deepEqual(detectLossyCliff(-20.0, null), { suspected: false, cliffHz: null, gapDb: null });
-  assert.deepEqual(detectLossyCliff(null, null), { suspected: false, cliffHz: null, gapDb: null });
-});
-
-test('LOSSY_CLIFF_GAP_DB is the threshold detectLossyCliff actually uses', () => {
-  assert.equal(detectLossyCliff(0, -LOSSY_CLIFF_GAP_DB).suspected, true);
-  assert.equal(detectLossyCliff(0, -(LOSSY_CLIFF_GAP_DB - 0.1)).suspected, false);
-});
+// The "possible lossy source" flag used to be tested here. It was removed after being
+// measured against real files: through the filter chain it actually ran (a 2-pole,
+// 12 dB/oct highpass at 16 kHz, which leaks the whole midrange into the "high band"),
+// a genuine 128 kbps MP3 produced a 19.3 dB gap and a lossless but dark master 46.0 dB,
+// against a 45 dB threshold - so it missed real lossy sources and flagged lossless ones.
+// These tests never caught it because they fed the pure function invented numbers
+// (-28.5 / -91.0) that no real file produces. If a lossy detector is ever rebuilt, it
+// needs a steep filter and a threshold measured from files, and the test for it has to
+// assert on real measurements rather than on the arithmetic.
 
 // --------------------------------------------------------------------------
 // sanitizeUploadName

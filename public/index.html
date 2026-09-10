@@ -92,12 +92,11 @@
         Ladda upp en färdig ljudfil så mäts hela den: all metadata (codec, bitdjup,
         samplingsfrekvens, taggar, omslagsbild, kapitel), ljudnivå (LUFS) och true peak
         som en kurva över hela filen, dynamik (LRA, crest factor, klippning), stereobild
-        och fas, samt ett spektrogram. Är energin tvärt avskuren högt upp flaggas det som
-        att filen kan komma från en lossy källa (t.ex. en MP3 omkodad till FLAC).
+        och fas, samt ett spektrogram – där en spikrak kant högt upp avslöjar en fil som
+        gjorts från en lossy källa (t.ex. en MP3 omkodad till FLAC).
       </p>
       <p>
-        Väldigt långa filer analyseras bara de första 130 minuterna. Filen laddas upp till
-        verktygets server, analyseras med ffmpeg och sparas inte.
+        Filen laddas upp till verktygets server, analyseras med ffmpeg och sparas inte.
       </p>
     </details>
 
