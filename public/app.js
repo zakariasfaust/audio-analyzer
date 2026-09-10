@@ -1076,6 +1076,13 @@ let baseVariantsInfo = null;
 // instead of overwriting the newer run's results and clearing its status line.
 let runToken = 0;
 
+// Called by the file-analysis view (file.js) before it takes over #results, so an
+// in-flight analysis whose sample phase resolves later finds itself stale and stops
+// rather than writing into a #sec-id3 that no longer exists.
+function cancelAnalysis() {
+  runToken++;
+}
+
 async function runAnalysis(targetUrl, { isVariantSwitch = false } = {}) {
   // A running log owns #results and keeps writing to it every 15 seconds. Analysing
   // without stopping it first would have the two overwrite each other.

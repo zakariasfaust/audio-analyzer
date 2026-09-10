@@ -35,6 +35,8 @@ before(async () => {
       // Low on purpose: the jobGuard test below needs a ceiling small enough to
       // trip with a handful of concurrent requests, not the production default.
       MAX_CONCURRENT_JOBS: '2',
+      // Small enough that a tiny test body trips the upload size limit.
+      MAX_UPLOAD_BYTES: '64',
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -71,6 +73,16 @@ async function postAnalyze(url) {
     body: JSON.stringify({ url }),
   });
   return { status: res.status, retryAfter: res.headers.get('Retry-After'), body: await res.json() };
+}
+
+async function postFile(body, name = 'x.wav') {
+  const res = await fetch(`${baseUrl}/api/analyze-file?name=${encodeURIComponent(name)}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/octet-stream' },
+    body,
+    duplex: 'half',
+  });
+  return { status: res.status, body: await res.json() };
 }
 
 // --------------------------------------------------------------------------
@@ -148,6 +160,25 @@ test('an unknown /api/* route returns 404 NOT_FOUND', async () => {
 // --------------------------------------------------------------------------
 // jobGuard - the concurrency ceiling, tripped for real
 // --------------------------------------------------------------------------
+
+// --------------------------------------------------------------------------
+// /api/analyze-file - the upload route's guards, without ffmpeg
+// --------------------------------------------------------------------------
+
+test('POST /api/analyze-file rejects a body over MAX_UPLOAD_BYTES with 413 UPLOAD_REJECTED', async () => {
+  const { status, body } = await postFile(Buffer.alloc(4096, 1)); // 4 KB > the 64 B test cap
+
+  assert.equal(status, 413);
+  assert.equal(body.error.code, 'UPLOAD_REJECTED');
+});
+
+test('POST /api/analyze-file rejects an empty body readably', async () => {
+  const { status, body } = await postFile('');
+
+  assert.equal(status, 413);
+  assert.equal(body.error.code, 'UPLOAD_REJECTED');
+  assert.equal(typeof body.error.message, 'string');
+});
 
 test('jobGuard returns 503 BUSY with Retry-After once the concurrency ceiling is hit', async () => {
   // .invalid is a reserved TLD (RFC 2606) that never resolves - each request holds

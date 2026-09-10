@@ -121,6 +121,22 @@ export class ValidationError extends AppError {
   }
 }
 
+// An upload the server declines before analysing it: too large, or the body never
+// arrived. Separate from VALIDATION_ERROR so it can map to 413.
+export class UploadRejectedError extends AppError {
+  constructor(message, details = {}) {
+    super('UPLOAD_REJECTED', message, details);
+  }
+}
+
+// ffprobe could not find an audio stream in the upload (or could not read it as
+// media at all) - "this isn't an audio file", not a fault in our tooling.
+export class NotAudioFileError extends AppError {
+  constructor(message) {
+    super('NOT_AUDIO_FILE', message, {});
+  }
+}
+
 export class HostBlockedError extends AppError {
   constructor(hostname) {
     super('HOST_BLOCKED', `"${hostname}" pekar mot ett internt/privat nätverk och kan inte analyseras.`, {

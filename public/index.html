@@ -22,6 +22,12 @@
     <button type="button" id="log-btn" title="Följ strömmen över tid i stället för att ta en ögonblicksbild">Logga</button>
   </form>
 
+  <form id="file-form">
+    <label for="file-input">eller analysera en uppladdad ljudfil (wav, flac, mp3, aac, ogg …):</label>
+    <input type="file" id="file-input" accept="audio/*,.wav,.flac,.mp3,.m4a,.aac,.ogg,.opus,.aiff,.wma" required />
+    <button type="submit" id="file-btn">Analysera fil</button>
+  </form>
+
   <details id="faq">
     <summary>Om verktyget</summary>
 
@@ -75,6 +81,21 @@
     </details>
 
     <details>
+      <summary>Vad får jag ut av att analysera en fil?</summary>
+      <p>
+        Ladda upp en färdig ljudfil så mäts hela den: all metadata (codec, bitdjup,
+        samplingsfrekvens, taggar, omslagsbild, kapitel), ljudnivå (LUFS) och true peak
+        som en kurva över hela filen, dynamik (LRA, crest factor, klippning), stereobild
+        och fas, samt ett spektrogram. Är energin tvärt avskuren högt upp flaggas det som
+        att filen kan komma från en lossy källa (t.ex. en MP3 omkodad till FLAC).
+      </p>
+      <p>
+        Väldigt långa filer analyseras bara de första 130 minuterna. Filen laddas upp till
+        verktygets server, analyseras med ffmpeg och sparas inte.
+      </p>
+    </details>
+
+    <details>
       <summary>Hur fungerar loggningen?</summary>
       <p>
         Loggningen spelar in 15 sekunder av ljudet, mäter ljudnivå (LUFS, True Peak)
@@ -119,5 +140,6 @@
   <script src="shared.js"></script>
   <script src="app.js"></script>
   <script src="log.js"></script>
+  <script src="file.js"></script>
 </body>
 </html>

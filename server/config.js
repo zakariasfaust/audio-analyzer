@@ -41,6 +41,41 @@ export const MAX_TIMELINE_ENTRIES = 50_000;
 // Hard cap on the recorded sample regardless of the bitrate the stream claims.
 export const MAX_SAMPLE_FILE_BYTES = 50 * 1024 * 1024;
 
+// --- Uploaded-file analysis (Fas 4) -----------------------------------------
+// A file is streamed straight to a temp file (never buffered in memory), so this
+// bounds disk, not RAM - but a huge upload still costs a decode pass, so it is
+// capped anyway. Comparable to MAX_SAMPLE_FILE_BYTES, a little larger because a
+// lossless album is legitimately 60-150 MB.
+export const MAX_UPLOAD_BYTES = envNumber('MAX_UPLOAD_BYTES', 100 * 1024 * 1024);
+
+// How much audio the loudness/astats/phase pass will actually decode. A 2-hour
+// podcast at real-time-ish decode speed would blow past any sane request budget,
+// so the analysis is of the first N seconds and the response says so. 130 min
+// covers a long album or DJ set whole.
+export const FILE_ANALYSIS_MAX_SECONDS = envNumber('FILE_ANALYSIS_MAX_SECONDS', 7800);
+
+// The spectrogram + the lossy-source band check get their own, much shorter
+// window: an encoder's high-frequency ceiling is a constant property of the file,
+// so a slice is as telling as the whole thing and costs a fraction of the decode.
+export const SPECTROGRAM_MAX_SECONDS = envNumber('SPECTROGRAM_MAX_SECONDS', 600);
+
+// Per-child ceiling for the two file-analysis ffmpeg passes. Far longer than
+// TIMEOUT_MS (10s, sized for network reads) because decoding 130 min of audio is
+// minutes of CPU, not seconds. The passes run in parallel, so wall time is the
+// slower of the two, not the sum.
+export const FILE_ANALYSIS_TIMEOUT_MS = envNumber('FILE_ANALYSIS_TIMEOUT_MS', 600_000);
+
+// Request-level ceiling for POST /api/analyze-file specifically - the generic
+// REQUEST_DEADLINE_MS (90s) would kill a legitimate long-file analysis. Slightly
+// above FILE_ANALYSIS_TIMEOUT_MS so a child that hits its own timeout produces the
+// specific error rather than being cut off by the request deadline first.
+export const FILE_REQUEST_DEADLINE_MS = envNumber('FILE_REQUEST_DEADLINE_MS', 660_000);
+
+// ebur128 framelog=info writes one line per ~100ms; 130 min is ~12 MB of stderr,
+// past which the frame log (and the Summary after it) would be truncated. The
+// file-analysis pass raises runChildProcess's output cap to this to leave headroom.
+export const FILE_ANALYSIS_MAX_STDERR_BYTES = envNumber('FILE_ANALYSIS_MAX_STDERR_BYTES', 64 * 1024 * 1024);
+
 // Safety cap on how far into the audio body we'll read hunting for the first ICY
 // metadata block. icy-metaint is typically 8-16 KB, so this covers a couple of
 // intervals even on a low-bitrate stream while bounding memory hard.

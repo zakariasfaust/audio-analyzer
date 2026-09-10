@@ -205,4 +205,46 @@ const STREAM_TERMS = {
     'Tystnad = strömmen fungerade men lät ingenting. Strömmen nere = anropet misslyckades, t.ex. att servern inte svarade eller svarade med ett fel.',
   'medel-lufs':
     'Medelvärdet av ljudnivån i varje enskild mätning. Det är inte samma sak som en integrerad ljudnivå för hela sändningen. EBU R128 viktar och gallrar över hela materialet, vilket inte går att räkna fram i efterhand ur medelvärden. Använd det som en trend, inte som ett exakt mått.',
+
+  // Uploaded file analysis
+  'fil-oversikt':
+    'Allt filen själv säger om sig: containerformat, längd, bitrate, sampleformat, bitdjup, encoder-sträng och inbäddade taggar. Läst med ffprobe utan att avkoda ljudet.',
+  'fil-container':
+    'Filformatet som paketerar ljudet, t.ex. WAV, FLAC, MP3, MP4/M4A eller Ogg. Samma ljudkodek kan ligga i flera olika containrar.',
+  'fil-langd': 'Filens totala speltid, läst ur containern. Filer längre än 130 minuter analyseras bara till den gränsen.',
+  tlen:
+    'ID3-taggen TLEN anger låtens längd i millisekunder. Den skrevs av programmet som taggade filen och stämmer inte alltid med filens verkliga längd, t.ex. om filen har klippts eller kodats om efter att taggen sattes. Övriga interna eller binära taggar (Windows Media-id:n m.m.) visas inte alls.',
+  sampleformat:
+    'Hur varje sampling lagras internt, t.ex. s16 (16-bitars heltal), s32 (32-bitars heltal) eller fltp (32-bitars flyttal). Säger inte alltid hur många bitar som faktiskt används, se Bitdjup.',
+  bitdjup:
+    'Hur många bitars upplösning ljudet har. "Deklarerat" är vad containern anger; "faktiskt använda" är hur många bitar datan verkligen rör sig i. Är de olika är filen uppsamplad eller utfylld med nollor, t.ex. en 16-bitars inspelning sparad som 24-bitars.',
+  encoder:
+    'Programmet och ofta versionen som skapade filen, ur en tagg som "LAME3.100" eller "libFLAC 1.4.2". Kan avslöja hur filen har bearbetats.',
+  replaygain:
+    'ReplayGain/R128-taggar anger hur mycket en spelare bör dämpa eller höja filen för jämn uppspelningsnivå. De sätts av rippnings- eller taggningsverktyg, inte av det här verktyget, och ändrar inte själva ljudet.',
+  omslagsbild: 'Om en bild (skivomslag) ligger inbäddad i filen, och i så fall dess pixelmått och format.',
+  kapitel: 'Kapitelmärken i filen, vanliga i ljudböcker och poddar. Visar start, slut och titel för varje kapitel.',
+  lra:
+    'Loudness Range (LU) – skillnaden mellan de tystare och de starkare partierna över hela filen, enligt EBU R128. Högt värde = dynamiskt (t.ex. klassiskt, 10–20+ LU); lågt värde = hårt komprimerat (ofta 3–6 LU för modern pop). Mäts inte på strömmar eftersom 15 sekunder är för kort.',
+  'sample-peak':
+    'Den högsta enskilda samplingen (dBFS), utan hänsyn till vad som händer mellan samplingarna. True peak ligger alltid lika högt eller högre; skillnaden är de toppar som uppstår först vid uppspelning.',
+  plr:
+    'Peak-to-Loudness Ratio: true peak minus integrerad nivå (LU). Stort värde = mycket dynamik kvar (punchig master); nära 0 = allt tryckt mot taket ("loudness war"). Runt 8–15 LU är typiskt för en ocomprimerad master, under 5 för en hårt begränsad.',
+  'dc-offset':
+    'En konstant förskjutning av ljudsignalen från noll. Bör vara i princip 0. Ett tydligt DC-offset betyder ett fel i inspelnings- eller digitaliseringskedjan och äter dessutom av rubriken.',
+  'rms-niva': 'Den genomsnittliga energinivån i ljudet (dB), ungefär hur starkt det låter i snitt – till skillnad från topparna.',
+  'crest-factor':
+    'Förhållandet mellan toppnivå och RMS-nivå. ≈ 1,41 för en ren sinuston, större för dynamiskt material (trummor, orkester), och krymper mot 1 ju hårdare materialet är komprimerat/limiterat.',
+  brusgolv: 'Den lägsta nivån i ljudet (dB) – i praktiken bruset eller tystnaden mellan ljuden. Lågt värde = tyst inspelning, högt = hörbart brus/brum.',
+  klippning:
+    'Antal samplingar som ligger exakt på det digitala maxvärdet. Ett fåtal är normalt; många i rad betyder att signalen har klippts (kan låta distat) eller körts hårt genom en limiter.',
+  stereokorrelation:
+    'Samma mätning som korrelationsmätaren på ett mixerbord: hur lika vänster och höger kanal är, −1 till +1. +1 = identiska (mono); +0,5 till +1 är den mono-säkra zonen; runt 0 = mycket bred/dekorrelerad; under 0 = kanalerna motverkar varandra och tappar energi vid mono-summering (mobil, Bluetooth, klubb, mono-sändning). Räknas ur mid/side-nivåerna så tystnad inte påverkar värdet, och mäts på de första 10 minuterna av längre filer.',
+  dubbelmono: 'En "stereofil" där båda kanalerna är exakt samma signal – ingen stereobild alls, och halva datamängden är bortkastad. Korrelationen ligger då låst på +1.',
+  fas:
+    'Partier där kanalerna antingen motverkar varandra ("ur fas") eller är helt identiska ("mono"), med start och sluttid. Tystnad har räknats bort, så det som listas är verkliga partier med ljud. "Ur fas" är det som är värt att åtgärda: signalen tunnas ut eller försvinner när ljudet summeras till mono. "Mono" mitt i en i övrigt bred mix kan vara avsiktligt (mono-intro, centrerad sång) eller ett spår som råkat renderas som dubbelmono.',
+  spektrogram:
+    'En bild av vilka frekvenser (lodrätt) som finns vid varje tidpunkt (vågrätt), starkare färg = mer energi. En skarp vågrät kant högt upp betyder att inget alls spelas in ovanför den frekvensen.',
+  'lossy-kalla':
+    'Lossy-kodning (MP3, AAC) kapar de högsta frekvenserna hårt – vid 128 kbit/s runt 16 kHz. Ser vi en sådan tvär avskärning i en FLAC eller WAV är filen troligen gjord från en lossy källa. Det är en indikation, inte ett bevis: även avsiktlig mastering och gammalt/dovt material kan se likadant ut.',
 };

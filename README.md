@@ -16,6 +16,15 @@ entirely in the browser tab.
 The stream type is detected automatically from the response (Content-Type and
 `icy-*` headers, then a small body peek), so the same URL field takes any of them.
 
+Or **upload an audio file** (wav, flac, mp3, aac, ogg, m4a …) with the file
+picker below the URL field: it is measured whole - all metadata (codec, bit
+depth declared vs. actually used, tags, cover art, chapters), a loudness/true-peak
+curve over the file, loudness range (LRA), PLR, DC offset, crest factor, clipped
+samples, a stereo-correlation reading (−1..+1, silence excluded) with the real
+out-of-phase / mono stretches listed, and a spectrogram with a "consistent with a
+lossy source" flag when high-frequency energy is cut off abruptly. Files longer
+than 130 min are analysed to that point. Non-audio files just say so.
+
 ## Why a backend?
 
 Most CDNs (e.g. Akamai) don't send CORS headers on their manifests,
@@ -75,6 +84,11 @@ the app's own root path every 30s.
 | `MEMORY_RATIO_THRESHOLD` | `0.8` | Reject a new job once cgroup memory usage reaches this fraction of the container's limit (Linux/Docker only). |
 | `MAX_RSS_BYTES` | `450 * 1024 * 1024` | Fallback memory ceiling (Node process RSS only) when no cgroup is readable, e.g. local dev. |
 | `REQUEST_DEADLINE_MS` | `90000` | Hard wall-clock ceiling per request; aborts in-flight work past this. |
+| `MAX_UPLOAD_BYTES` | `100 * 1024 * 1024` | Cap on an uploaded file for `/api/analyze-file`. Streamed to a temp file, never buffered in memory. |
+| `FILE_ANALYSIS_MAX_SECONDS` | `7800` | How much of a long upload is decoded (130 min). Past this the result is marked truncated. |
+| `SPECTROGRAM_MAX_SECONDS` | `600` | Window for the spectrogram + lossy-source band check (a frequency ceiling is constant, so a slice is enough). |
+| `FILE_ANALYSIS_TIMEOUT_MS` | `600000` | Per-child ceiling for the two file-analysis ffmpeg passes (they run in parallel). |
+| `FILE_REQUEST_DEADLINE_MS` | `660000` | `REQUEST_DEADLINE_MS` for `/api/analyze-file` only - a full-file decode is minutes. |
 
 ## Testing
 
@@ -97,6 +111,10 @@ that needs a real stream is left to manual verification:
 2. Test a failure case by pasting in a URL that returns 404 or points to
    a page that is neither an M3U8 nor an MPD - the error should display readably,
    the page should never go blank.
+3. Upload an audio file (mp3/wav/flac/m4a/ogg): metadata, the loudness curve, the
+   dynamics numbers and the spectrogram should render. Cross-check LUFS/LRA against
+   `ffmpeg -i <file> -af loudnorm=print_format=json -f null -`. Upload a `.txt` or a
+   video without audio - it should say "not an audio file", never go blank.
 
 ## Good to know
 
@@ -200,6 +218,12 @@ exception. What is in place, and where it stops:
   50 000 `<S>` rows.
 - **Recording is capped** - `/api/sample` records audio only (no video), 15s max,
   50 MB max.
+- **Uploads are capped and never buffered** - `/api/analyze-file` streams the request
+  body straight to a temp file, rejecting with 413 once `MAX_UPLOAD_BYTES` (100 MB) is
+  exceeded, so a hostile large upload costs one aborted connection, not memory. The
+  decode passes are bounded by `FILE_ANALYSIS_MAX_SECONDS` and run under `jobGuard` and
+  the same `-protocol_whitelist file` as the loudness pass. The filename query
+  parameter is display-only; the temp file always gets a server-generated name.
 - **Browser-side** - a strict Content-Security-Policy (`default-src 'self'`) plus the
   rest of helmet's defaults. The page renders remote-controlled strings, so every URL
   that becomes a link is scheme-checked first; escaping alone does not stop

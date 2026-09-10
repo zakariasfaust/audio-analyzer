@@ -8,6 +8,9 @@ import express from 'express';
 import rateLimit from 'express-rate-limit';
 import helmet from 'helmet';
 import path from 'node:path';
+import os from 'node:os';
+import { promises as fs } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { setMaxListeners } from 'node:events';
 
@@ -15,12 +18,15 @@ import { AppError } from './errors.js';
 import { validateUrl } from './net.js';
 import { sampleStream, checkBinaryAvailable } from './ffmpeg.js';
 import { analyze } from './analyzer.js';
+import { analyzeAudioFile, sanitizeUploadName, saveRequestBodyToFile } from './file.js';
 import { fetchIcyMetadata } from './icecast.js';
 import { readMemorySnapshot, evaluateJobCapacity } from './resourceGuard.js';
 import {
   envNumber,
   MAX_CONCURRENT_JOBS,
+  MAX_UPLOAD_BYTES,
   REQUEST_DEADLINE_MS,
+  FILE_REQUEST_DEADLINE_MS,
   MEMORY_RATIO_THRESHOLD,
   MAX_RSS_BYTES,
   RATE_LIMIT_WINDOW_MS,
@@ -149,6 +155,8 @@ const STATUS_BY_CODE = {
   BINARY_MISSING: 500,
   FFPROBE_FAILED: 500,
   FFMPEG_FAILED: 500,
+  UPLOAD_REJECTED: 413,
+  NOT_AUDIO_FILE: 415,
 };
 
 function sendError(res, err) {
@@ -171,15 +179,15 @@ function sendError(res, err) {
 // The handler gets (req, res, signal) and must thread `signal` into analyze() /
 // sampleStream() so in-flight fetches and child processes are actually killed -
 // otherwise "we stopped waiting" doesn't mean "the work stopped".
-function withRequestAbort(handler) {
+function withRequestAbort(handler, { deadlineMs = REQUEST_DEADLINE_MS } = {}) {
   return async (req, res) => {
     const controller = new AbortController();
     // One analysis makes ~15 fetches, each briefly composing this signal via
     // AbortSignal.any(); raise the ceiling so that never logs a warning.
     setMaxListeners(50, controller.signal);
     const deadline = setTimeout(() => {
-      controller.abort(new AppError('REQUEST_TIMEOUT', `Analysen översteg ${REQUEST_DEADLINE_MS / 1000} s och avbröts.`));
-    }, REQUEST_DEADLINE_MS);
+      controller.abort(new AppError('REQUEST_TIMEOUT', `Analysen översteg ${Math.round(deadlineMs / 1000)} s och avbröts.`));
+    }, deadlineMs);
     const onClose = () => {
       if (!res.writableFinished) controller.abort(new AppError('REQUEST_ABORTED', 'Klienten avbröt anslutningen.'));
     };
@@ -236,6 +244,29 @@ app.get(
     }
     res.json(sample);
   })
+);
+
+// Analyse an uploaded audio file. The file arrives as the raw request body (the
+// client sets Content-Type: application/octet-stream), streamed straight to a temp
+// file with a size cap - no multipart parser, nothing buffered in memory. `?name=`
+// is the original filename, for display only. Same jobGuard as the two stream
+// routes (it spawns ffprobe/ffmpeg); its own, much longer deadline because
+// decoding a full track is minutes, not the ~90 s a stream analysis needs.
+app.post(
+  '/api/analyze-file',
+  jobGuard,
+  withRequestAbort(
+    async (req, res, signal) => {
+      const tempFile = path.join(os.tmpdir(), `audio-analyzer-upload-${randomUUID()}`);
+      try {
+        await saveRequestBodyToFile(req, tempFile, MAX_UPLOAD_BYTES, signal);
+        res.json(await analyzeAudioFile(tempFile, sanitizeUploadName(req.query.name), { signal }));
+      } finally {
+        await fs.unlink(tempFile).catch(() => {});
+      }
+    },
+    { deadlineMs: FILE_REQUEST_DEADLINE_MS }
+  )
 );
 
 app.use('/api', (req, res) => {

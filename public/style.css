@@ -214,10 +214,51 @@ pre {
   font-style: italic;
 }
 
-dt[title], th[title], h2[title], h3[title] {
+dt[title], th[title], h2[title], h3[title], span[title] {
   cursor: help;
   text-decoration: underline dotted;
   text-underline-offset: 3px;
+}
+
+/* --- Uploaded-file analysis (rendered into #results by file.js) ------- */
+
+#file-form {
+  margin: 0.75rem 0 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.9rem;
+}
+
+#file-form label {
+  color: #555;
+}
+
+canvas.analysis-chart {
+  width: 100%;
+  height: 220px;
+  border: 1px solid #ddd;
+}
+
+img.spectrogram {
+  max-width: 100%;
+  height: auto;
+  border: 1px solid #ddd;
+  display: block;
+  margin-top: 0.4rem;
+}
+
+.tag-mismatch, .stereo-warn {
+  color: #b45309;
+  font-family: system-ui, sans-serif;
+  font-size: 0.85rem;
+}
+
+/* Kept in sync with drawFileLoudnessChart() in file.js. */
+.swatch-integrated {
+  background: repeating-linear-gradient(90deg, #15803d 0 4px, transparent 4px 8px);
+  border-color: #15803d;
 }
 
 /* --- Stream log (rendered into #results by log.js) -------------------- */
