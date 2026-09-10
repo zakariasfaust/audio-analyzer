@@ -39,28 +39,28 @@ const STREAM_TERMS = {
   cors:
     'Cross-Origin Resource Sharing - headern som avgör om en webbsida på en annan domän får läsa svaret. Saknas den måste en proxy hämta strömmen istället för webbläsaren.',
   'geo-hint':
-    'Många CDN-noder namnges med en flygplatskod (t.ex. ARN för Stockholm Arlanda) följt av siffror. Det här är en ogranskad gissning baserad på det mönstret i nodnamnet - inte en bekräftad plats.',
+    'Många CDN-noder namnges med en flygplatskod (t.ex. ARN för Stockholm Arlanda) följt av siffror. Det här är en ogranskad gissning baserad på det mönstret i nodnamnet',
   'dns-lookup':
-    'Vilka IP-adresser värdnamnet pekar mot just nu, uppslaget av verktygets egen backend. CDN:er använder ofta DNS-baserad lastbalansering, så resultatet kan variera mellan anrop och är inte nödvändigtvis samma nod som faktiskt svarade på anropet i Anslutning-kortet.',
+    'Vilka IP-adresser värdnamnet pekar mot just nu, uppslaget av verktygets egen backend. CDN:er använder ofta DNS-baserad lastbalansering, så resultatet kan variera mellan anrop och är inte nödvändigtvis samma nod som faktiskt svarade på anropet.',
   'ip-geo':
-    'Stad/land för varje IP, från en lokal offline-databas. Ett grovt komplement till hintan ovan - kan vara fel eller inaktuellt, särskilt för CDN-adresser.',
+    'Stad/land för varje IP, från en lokal offline-databas. Ett grovt komplement till hintan ovan',
   'extra-headers':
-    'HTTP-headrar i svaret vars namn börjar med "x-" (en gammal konvention för icke-standardiserade headrar), innehåller "akamai", eller börjar med "icy-" (stationsinfo från Icecast/SHOUTcast/RSAS). Ofta de mest talande för vad som hänt hos CDN:et eller strömservern.',
+    'HTTP-headrar i svaret vars namn börjar med "x-" (en gammal konvention för icke-standardiserade headrar), innehåller "akamai", eller börjar med "icy-". Ofta de mest talande för vad som hänt hos CDN:et eller strömservern.',
 
   // Variants (th)
   'variant-bandbredd':
-    'Toppbandbredden (kbit/s) variantens kodning kan kräva, enligt manifestet - ett riktvärde, inte samma sak som den faktiska uppmätta bitraten.',
+    'Toppbandbredden (kbit/s) variantens kodning kan kräva, enligt manifestet. Är ett riktvärde, inte samma sak som den faktiska uppmätta bitraten.',
   'variant-snitt':
-    'Genomsnittlig bandbredd (kbit/s) för varianten över tid, om manifestet anger det - oftast mer realistisk än toppvärdet.',
+    'Genomsnittlig bandbredd (kbit/s) för varianten över tid, om manifestet anger det och är oftast mer realistisk än toppvärdet.',
   codecs: 'Anger exakt vilka kodekar som används, i standardiserat format. "mp4a.40.2" betyder till exempel AAC-LC-ljud.',
   upplosning: 'Videoupplösningen i bredd × höjd bildpunkter. Tom för renodlade ljudströmmar som radio.',
   'variant-url': 'Länken till just den här variantens egna media-playlist.',
 
   // Audio track (dt)
   codec: 'Vilken ljudkodek segmenten är kodade med, t.ex. AAC. Profilen inom parentes (t.ex. LC) beskriver en specifik variant av kodeken.',
-  samplingsfrekvens: 'Hur många gånger per sekund ljudet mättes vid inspelningen, i Hertz. 48 000 och 44 100 Hz är vanligast.',
-  kanaler: 'Antal ljudkanaler - 1 är mono, 2 är stereo. Fler kanaler förekommer vid surroundljud.',
-  'audio-bitrate': 'Hur mycket data ljudet kodas med per sekund - högre bitrate ger normalt bättre kvalitet men kräver mer bandbredd.',
+  samplingsfrekvens: 'Hur många gånger per sekund ljudet mättes vid inspelningen,. Anges i Hertz.',
+  kanaler: '1 är mono, 2 är stereo och fler kanaler vid surroundljud.',
+  'audio-bitrate': 'Hur mycket data ljudet kodas med per sekund.',
   container: 'Filformatet segmenten är paketerade i, t.ex. MPEG-TS (.ts) eller fragmenterad MP4 (fMP4).',
 
   // Segments and buffer (dt)
@@ -70,26 +70,26 @@ const STREAM_TERMS = {
   mediasequence:
     'Ett löpnummer som talar om vilket segment i den totala strömmen som är först i den aktuella listan. Ökar när äldre segment plockas bort från fönstret.',
   typ: 'Live betyder att manifestet uppdateras kontinuerligt utan slut; VOD betyder en avslutad, färdig ström.',
-  'antal-segment': 'Hur många segment som just nu listas i manifestets "fönster" - det synliga utsnittet av den pågående strömmen.',
+  'antal-segment': 'Hur många segment som just nu listas i manifestets "fönster", det vill säga det synliga utsnittet av den pågående strömmen.',
   fonsterlangd:
-    'Den sammanlagda spellängden i sekunder för alla segment i fönstret - ungefär så mycket spelaren kan buffra utan att hämta ett nytt manifest.',
+    'Den sammanlagda spellängden i sekunder för alla segment i fönstret och därmed ungefär så mycket spelaren kan buffra utan att hämta ett nytt manifest.',
   snittlangd: 'Genomsnittlig längd per segment, beräknad från fönstrets totala längd delat på antal segment.',
   krypterat: 'Om segmenten är krypterade enligt EXT-X-KEY-taggen. Spelaren behöver rätt nyckel för att kunna spela upp strömmen.',
   fmp4: 'Om segmenten är i fragmenterat MP4-format istället för det äldre MPEG-TS, angivet av EXT-X-MAP-taggen.',
   discontinuities:
-    'Antal EXT-X-DISCONTINUITY-hopp i fönstret - punkter där kodning, tidsbas eller format byts (t.ex. vid reklamavbrott). Varje sådan tvingar spelaren att tömma och bygga upp sin buffert på nytt, vilket kan höras som en kort paus.',
+    'Antal EXT-X-DISCONTINUITY-hopp i fönstret. Vilket innebär punkter där kodning, tidsbas eller format byts (t.ex. vid reklamavbrott). Varje sådan tvingar spelaren att tömma och bygga upp sin buffert på nytt, vilket kan höras som en kort paus.',
 
   // Low-Latency HLS (h3 + dt)
   llhls:
     'LL-HLS (Low-Latency HLS) är en uppsättning tillägg till HLS-standarden som sänker fördröjningen genom att dela upp segment i mindre "parts" som spelaren kan hämta innan hela segmentet är klart. Kräver stöd hos både paketerare, CDN och spelare för att fungera.',
   'll-can-block-reload':
-    'Om servern stödjer "blockerande" manifestförfrågningar - spelaren kan be servern vänta med svaret tills ett nytt segment eller delsegment finns, istället för att polla. En grundförutsättning för LL-HLS.',
+    'Om servern stödjer "blockerande" manifestförfrågningar. Spelaren kan be servern vänta med svaret tills ett nytt segment eller delsegment finns, istället för att polla. En grundförutsättning för LL-HLS.',
   'll-hold-back':
     'Rekommenderad distans (sekunder) från livekanten som manifestet ber vanliga spelare hålla, från EXT-X-SERVER-CONTROL. Ett lågt värde betyder att strömmen är byggd för låg latens.',
   'll-part-hold-back':
-    'Samma sak som HOLD-BACK, men specifikt för spelare som stödjer LL-HLS och kan buffra i delsegment ("parts") - normalt ett lägre värde eftersom de kan ligga närmare livekanten.',
+    'Samma sak som HOLD-BACK, men specifikt för spelare som stödjer LL-HLS och kan buffra i delsegment ("parts"). Normalt ett lägre värde eftersom de kan ligga närmare livekanten.',
   'll-can-skip-until':
-    'Hur långt tillbaka (sekunder) en spelare får be om en förkortad manifestuppdatering (EXT-X-SKIP) istället för hela listan, för att spara bandbredd vid täta uppdateringar.',
+    'Hur långt tillbaka en spelare får be om en förkortad manifestuppdatering (EXT-X-SKIP) istället för hela listan, för att spara bandbredd vid täta uppdateringar.',
   'll-can-skip-dateranges':
     'Om servern även stödjer att hoppa över EXT-X-DATERANGE-taggar i en förkortad manifestuppdatering (EXT-X-SKIP).',
   'll-part-target':
@@ -99,7 +99,7 @@ const STREAM_TERMS = {
 
   // Continuity and start point (h3 + dt)
   kontinuitet:
-    'Visar var i strömmen kodning eller tidsbas faktiskt byts (discontinuities), och var en spelare rekommenderas börja spela upp - två separata saker som lätt blandas ihop med latens och buffertfönster.',
+    'Visar var i strömmen kodning eller tidsbas faktiskt byts (discontinuities), och var en spelare rekommenderas börja spela upp. Två separata saker som lätt blandas ihop med latens och buffertfönster.',
   'discontinuity-sequence':
     'Startvärdet för discontinuity-räknaren i det här manifestet (EXT-X-DISCONTINUITY-SEQUENCE). Används av spelare för att hålla koll på kontinuitetshopp korrekt även när de bytt mellan olika varianter.',
   'ext-x-start':
@@ -107,12 +107,12 @@ const STREAM_TERMS = {
 
   // Latency (dt)
   'latens-metod':
-    '"Uppmätt direkt" betyder att flera segment har egna tidsstämplar och siffran är tillförlitlig. "Beräknad från segmentsumma" betyder att bara ett segment i fönstret hade en tidsstämpel (vanligt i äldre HLS) - resten är extrapolerat genom att addera segmentens längder, vilket gör siffran mer osäker.',
+    '"Uppmätt direkt" betyder att flera segment har egna tidsstämplar och siffran är tillförlitlig. "Beräknad från segmentsumma" betyder att bara ett segment i fönstret hade en tidsstämpel (vanligt i äldre HLS) och resten är extrapolerat genom att addera segmentens längder, vilket gör siffran mer osäker.',
   'aldsta-ts': 'Tidsstämpeln för det äldsta segmentet i det synliga fönstret, enligt dess PROGRAM-DATE-TIME-tagg.',
-  'nyaste-ts': 'Tidsstämpeln för det senaste segmentet i det synliga fönstret - ligger närmast liveläget.',
+  'nyaste-ts': 'Tidsstämpeln för det senaste segmentet i det synliga fönstret',
   'fordrojning-aldsta': 'Hur många sekunder som gått mellan det äldsta segmentets tidsstämpel och nu. Ungefär hela buffertfönstrets ålder.',
   'fordrojning-nyaste':
-    'Hur många sekunder som gått sedan det senaste tillgängliga segmentet spelades in - ett mått på den faktiska fördröjningen en lyssnare upplever.',
+    'Hur många sekunder som gått sedan det senaste tillgängliga segmentet spelades in. Ger ett mått på den faktiska fördröjningen en lyssnare upplever.',
 
   // Measured bitrate (dt/th)
   'snitt-uppmatt':
@@ -144,7 +144,7 @@ const STREAM_TERMS = {
   minimumupdateperiod:
     'Hur ofta (sekunder) en spelare måste hämta om MPD:n för en dynamic ström för att upptäcka nya segment. Ett lågt värde antyder att strömmen är byggd för låg latens.',
   timeshiftbufferdepth:
-    'Hur långt bakåt i tiden (sekunder) en live-ström kan spolas - DASH:ens DVR-fönster. Motsvarar ungefär hur många segment HLS håller i sitt fönster.',
+    'Hur långt bakåt i tiden (sekunder) en live-ström kan spolas, DASH:ens DVR-fönster. Motsvarar ungefär hur många segment HLS håller i sitt fönster.',
   suggestedpresentationdelay:
     'Den fördröjning från livekanten (sekunder) som manifestet rekommenderar att spelare håller. Direkt jämförbar med HLS HOLD-BACK.',
   'dash-est-delay':
@@ -155,54 +155,54 @@ const STREAM_TERMS = {
   'manifest-age':
     'Hur länge sedan MPD:n senast publicerades (nu minus publishTime). Bör vara mindre än minimumUpdatePeriod för en välfungerande live-ström. Visas inte när publishTime är epoch-förankrad.',
   contentprotection:
-    'DRM/kryptering deklarerad i manifestet, visad som schemeIdUri (t.ex. Widevine, PlayReady, ClearKey). Verktyget visar bara att skyddet finns - det kan inte dekryptera, så ljudanalysen kan misslyckas för skyddade strömmar.',
+    'DRM/kryptering deklarerad i manifestet, visad som schemeIdUri (t.ex. Widevine, PlayReady, ClearKey). Verktyget visar bara att skyddet finns, så ljudanalysen kan misslyckas för skyddade strömmar.',
   'init-segment':
     'Ett separat initieringssegment (fMP4) som innehåller spårets uppsättningsdata och måste hämtas före de vanliga mediesegmenten. Anges av initialization-attributet i MPD:n.',
 
   // --- Icecast / SHOUTcast / RSAS ---
   icecast:
-    'Icecast, SHOUTcast och RSAS (Rocket Streaming Audio Server) är samma sorts strömserver: en enda oändlig ljudanslutning utan manifest eller segment. De delar protokoll - stationsinfo skickas i icy-*-headrar och låttiteln i ett litet metadatablock invävt i ljudflödet.',
+    'Icecast, SHOUTcast och RSAS (Rocket Streaming Audio Server) är samma sorts strömserver: en enda oändlig ljudanslutning utan manifest eller segment. De delar protokoll. Stationsinfo skickas i icy-*-headrar och låttiteln i ett litet metadatablock invävt i ljudflödet.',
   'station-name': 'Stationens namn enligt icy-name-headern servern skickar. Sätts av den som konfigurerar strömmen.',
   'station-genre': 'Genren stationen anger om sig själv i icy-genre-headern. Fritext, ingen fast lista.',
   'station-description': 'Stationens egen beskrivning ur icy-description (Icecast). SHOUTcast skickar sällan den.',
   'station-homepage': 'Länken stationen anger till sin webbplats i icy-url-headern.',
   'now-playing-icy':
-    'Titeln på det som spelas just nu, läst ur StreamTitle i ett metadatablock som servern väver in i ljudflödet med jämna mellanrum. Verktyget läser de första sekunderna och plockar ut första blocket - en del stationer har metadata avstängt.',
+    'Titeln på det som spelas just nu, läst ur StreamTitle i ett metadatablock som servern väver in i ljudflödet med jämna mellanrum. Verktyget läser de första sekunderna och plockar ut första blocket. En del stationer har metadata avstängt.',
   'server-software':
-    'Vilken strömserver som svarade, ur Server-headern - t.ex. "Icecast 2.4.4" eller "RocketStreamingAudioServer/1.x". SHOUTcast och RSAS talar samma icy-protokoll som Icecast.',
+    'Vilken strömserver som svarade, ur Server-headern t.ex. "Icecast 2.4.4" eller "RocketStreamingAudioServer/1.x". SHOUTcast och RSAS talar samma icy-protokoll som Icecast.',
   'icy-public':
     'Om stationen bett om att listas i publika kataloger (YP-directories), enligt icy-pub. Påverkar inte om du kan lyssna, bara om den syns i kataloger.',
   'icy-metaint':
-    'Antal bytes ljud mellan varje inbäddat metadatablock (icy-metaint). Skickas bara när klienten ber om metadata. Saknas det helt skickar strömmen ingen låttitel - vanligt och inget fel.',
+    'Antal bytes ljud mellan varje inbäddat metadatablock (icy-metaint). Skickas bara när klienten ber om metadata. Saknas det helt skickar strömmen ingen låttitel, vilket är  vanligt och inget fel.',
   'declared-bitrate-icy': 'Bitraten servern uppger i icy-br-headern, i kbit/s. Jämför med den uppmätta bitraten i Ljudprov nedan.',
   'declared-samplerate-icy': 'Samplingsfrekvensen servern uppger i icy-sr-headern, i Hz. Alla servrar skickar inte den.',
   'icecast-sample':
-    'Verktyget spelar in några sekunder av strömmen och mäter den faktiska datamängden per sekund. Letar även efter ID3-ramar - ovanligt för Icecast, där låttiteln normalt kommer via icy-metadata istället.',
+    'Verktyget spelar in några sekunder av strömmen och mäter den faktiska datamängden per sekund. Letar även efter ID3-ramar (ovanligt för Icecast) där låttiteln normalt kommer via icy-metadata istället.',
   'inspelad-langd':
-    'Hur många sekunder som faktiskt spelades in för mätningen - kan bli kortare än begärt om strömmen hackade eller anslutningen bröts.',
+    'Hur många sekunder som faktiskt spelades in för mätningen. Kan bli kortare än begärt om strömmen hackade eller anslutningen bröts.',
   'connect-burst':
-    'När en lyssnare ansluter skickar Icecast/SHOUTcast/RSAS direkt en klump redan buffrat ljud så uppspelningen kan starta snabbt, och strypar sedan till realtid. Verktyget spelar in strömmen så fort servern skickar och jämför inspelad speltid med väggklockstid — mellanskillnaden är den bufferten, dvs. ungefär hur långt efter sändningen en ny lyssnare börjar. Grov nedre gräns: anslutningstid, nätverksfart och eventuella reläservrar spär på osäkerheten, och "minst" betyder att hela provet rymdes i bufferten så den egentligen är större.',
+    'När en lyssnare ansluter skickar Icecast/SHOUTcast/RSAS direkt en klump redan buffrat ljud så uppspelningen kan starta snabbt, och strypar sedan till realtid. Verktyget spelar in strömmen så fort servern skickar och jämför inspelad speltid med väggklockstid. Mellanskillnaden är bufferten, dvs. ungefär hur långt efter sändningen en ny lyssnare börjar. Grov nedre gräns: anslutningstid, nätverksfart och eventuella reläservrar spär på osäkerheten, och "minst" betyder att hela provet rymdes i bufferten så den egentligen är större.',
 
   // Loudness (EBU R128) and silence
   loudness:
-    'Hur högt strömmen faktiskt låter, mätt enligt EBU R128 - branschstandarden för ljudnivå. Mätningen görs på samma inspelade ljudprov som bitraten, och letar samtidigt efter tystnad i ljudet.',
+    'Hur högt strömmen faktiskt låter, mätt enligt EBU R128. Mätningen görs på samma inspelade ljudprov som bitraten, och letar samtidigt efter tystnad i ljudet.',
   'integrated-lufs':
-    'Medelljudnivån över hela provet, viktad efter hur örat uppfattar ljud (LUFS). Riktvärden: -23 LUFS för broadcast/TV enligt EBU R128, och -14 till -16 LUFS för streamingtjänster som Spotify och YouTube. Ligger kanalen långt under sitt riktvärde låter den svag bredvid andra kanaler, och tvärtom.',
+    'Medelljudnivån över hela provet (LUFS). Riktvärden: -23 LUFS för broadcast/TV enligt EBU R128, och -14 till -16 LUFS för streamingtjänster som Spotify och YouTube.',
   'true-peak':
-    'Den högsta signaltoppen, mätt även mellan samplingspunkterna (dBTP) så att toppar som uppstår först vid uppspelning räknas med. Över -1 dBTP riskerar ljudet att klippa och låta distat i vissa spelare. "-∞" betyder att provet var helt digitalt tyst - ingen signal alls.',
+    'Den högsta signaltoppen, mätt även mellan samplingspunkterna (dBTP) så att toppar som uppstår först vid uppspelning räknas med. Över -1 dBTP riskerar ljudet att klippa och låta distat i vissa spelare. "-∞" betyder att provet var helt digitalt tyst',
   'tystnad-start': 'När tystnaden började, räknat från början av ljudprovet.',
   'tystnad-slut':
-    'När tystnaden slutade, räknat från början av ljudprovet. Står det att den pågick vid inspelningens slut var strömmen fortfarande tyst när provet tog slut, och då är längden en nedre gräns snarare än en mätning.',
+    'När tystnaden slutade, räknat från början av ljudprovet.',
   'tystnad-langd':
-    'Hur länge tystnaden varade. Korta pauser mellan låtar är normalt; längre tystnad kan betyda att sändningen tappat sin källa - dead air - även när strömmen i sig fortfarande fungerar.',
+    'Hur länge tystnaden varade. Korta pauser mellan låtar är normalt; längre tystnad kan betyda att sändningen tappat sin källa, även när strömmen i sig fortfarande fungerar.',
 
   // Stream log
   'tystnad-avbrott':
-    'Tystnad och avbrott är två olika fel och listas därför var för sig. "Tystnad" betyder att strömmen svarade och ljudet gick att spela in, men var tyst - sändningen har tappat sitt innehåll medan servern fortfarande fungerar. "Strömmen nere" betyder att anropet misslyckades helt: ingen ljuddata kom fram. Tystnad kortare än den inställda gränsen visas ingenstans - varken här, i sammanfattningen, i grafen eller bland händelserna.',
+    'Tystnad och avbrott är två olika fel och listas därför var för sig. "Tystnad" betyder att strömmen svarade och ljudet gick att spela in, men var tyst. "Strömmen nere" betyder att anropet misslyckades helt: ingen ljuddata kom fram. Tystnad kortare än den inställda gränsen visas ingenstans - varken här, i sammanfattningen, i grafen eller bland händelserna.',
   'status-strom':
-    'Om hämtningen av ljudet lyckades - alltså om strömmen svarade och gick att spela in. Det säger ingenting om att ljudet lät bra: femton sekunders total tystnad ger också OK. Misslyckas hämtningen räknas det som ett avbrott ("strömmen nere") - utom när felet beror på verktygets egen server: att den var upptagen, eller att den inte gick att nå alls. Båda visas separat och räknas inte som att strömmen var nere, eftersom de inte säger något om strömmen.',
+    'Om hämtningen av ljudet lyckades. Misslyckas hämtningen räknas det som ett avbrott, utom när felet beror på verktygets egen server: att den var upptagen, eller att den inte gick att nå alls. Båda visas separat och räknas inte som att strömmen var nere, eftersom de inte säger något om strömmen.',
   'tystnad-typ':
     'Tystnad = strömmen fungerade men lät ingenting. Strömmen nere = anropet misslyckades, t.ex. att servern inte svarade eller svarade med ett fel.',
   'medel-lufs':
-    'Medelvärdet av ljudnivån i varje enskild mätning. Det är inte samma sak som en integrerad ljudnivå för hela sändningen - EBU R128 viktar och gallrar över hela materialet, vilket inte går att räkna fram i efterhand ur medelvärden. Använd det som en trend, inte som ett exakt mått.',
+    'Medelvärdet av ljudnivån i varje enskild mätning. Det är inte samma sak som en integrerad ljudnivå för hela sändningen. EBU R128 viktar och gallrar över hela materialet, vilket inte går att räkna fram i efterhand ur medelvärden. Använd det som en trend, inte som ett exakt mått.',
 };
