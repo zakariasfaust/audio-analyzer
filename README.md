@@ -120,9 +120,10 @@ that needs a real stream is left to manual verification:
    video without audio - it should say "not an audio file", never go blank.
 4. The three views share one results area and each awaits a request before rendering,
    which no test covers (the frontend tests call render functions directly, with a stub
-   DOM). Start an analysis and pick a file while it loads - the Analysera button must
-   still be clickable afterwards. Click Logga and then Analysera immediately - the
-   analysis must survive the log's own startup request completing behind it.
+   DOM). Start a stream analysis and pick a file while it loads - the stream **Analysera**
+   button (an upload has none; it auto-analyses) must still be clickable afterwards. Click
+   Logga and then Analysera immediately - the analysis must survive the log's own startup
+   request completing behind it.
 
 ## Good to know
 
