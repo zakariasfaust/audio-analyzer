@@ -261,7 +261,7 @@ function loudnessFields(data) {
     field(
       'Samplingar i digitalt max',
       'klippning',
-      or(a.absPeakCount, (v) => fmtInt(v) + (v ? ' (kan betyda klippning eller hård limitering)' : ''))
+      or(a.absPeakCount, (v) => fmtInt(v))
     ),
     isStereo && stereoField(l.stereo),
   ];
