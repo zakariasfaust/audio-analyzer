@@ -15,18 +15,24 @@
     <input
       type="url"
       id="url-input"
-      placeholder="Klistra in en ström-URL här - HLS (.m3u8), DASH (.mpd) eller Icecast/radio (SHOUTcast, RSAS)"
+      placeholder="Ström-URL – HLS, DASH eller Icecast/radio"
       required
     />
     <button type="submit" id="analyze-btn">Analysera</button>
     <button type="button" id="log-btn" title="Följ strömmen över tid i stället för att ta en ögonblicksbild">Logga</button>
   </form>
 
-  <form id="file-form">
-    <label for="file-input">eller analysera en uppladdad ljudfil (wav, flac, mp3, aac, ogg …):</label>
-    <input type="file" id="file-input" accept="audio/*,.wav,.flac,.mp3,.m4a,.aac,.ogg,.opus,.aiff,.wma" required />
-    <button type="submit" id="file-btn">Analysera fil</button>
-  </form>
+  <p id="file-row">
+    eller analysera en ljudfil:
+    <label for="file-input" id="file-pick">Välj ljudfil…</label>
+    <input
+      type="file"
+      id="file-input"
+      class="visually-hidden"
+      accept="audio/*,.wav,.flac,.mp3,.m4a,.aac,.ogg,.opus,.aiff,.wma"
+    />
+    <span id="file-name"></span>
+  </p>
 
   <details id="faq">
     <summary>Om verktyget</summary>

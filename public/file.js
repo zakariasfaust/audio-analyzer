@@ -8,9 +8,9 @@
 // - no multipart, no FormData - which is what the server's streamed size-capped
 // reader expects.
 
-const fileForm = document.getElementById('file-form');
 const fileInput = document.getElementById('file-input');
-const fileBtn = document.getElementById('file-btn');
+const filePick = document.getElementById('file-pick');
+const fileName = document.getElementById('file-name');
 
 let lastFileData = null;
 let fileRunToken = 0;
@@ -521,7 +521,7 @@ async function analyzeFile(file) {
   const myToken = ++fileRunToken;
 
   lastFileData = null;
-  fileBtn.disabled = true;
+  filePick?.classList.add('busy');
   resultsEl.innerHTML = '';
   document.getElementById('analyzed-url-info').hidden = true;
   statusEl.textContent = `Analyserar ${file.name} …`;
@@ -546,22 +546,20 @@ async function analyzeFile(file) {
   } finally {
     if (myToken === fileRunToken) {
       statusEl.textContent = '';
-      fileBtn.disabled = false;
+      filePick?.classList.remove('busy');
     }
   }
 }
 
-if (fileForm) {
-  fileForm.addEventListener('submit', (event) => {
-    event.preventDefault();
-    const file = fileInput.files && fileInput.files[0];
-    if (!file) {
-      document.getElementById('status').textContent = 'Välj en fil först.';
-      return;
-    }
-    analyzeFile(file);
-  });
-}
+// No button - picking a file starts the analysis. `fileInput.value` is cleared so
+// choosing the same file again still fires `change`.
+fileInput?.addEventListener('change', () => {
+  const file = fileInput.files && fileInput.files[0];
+  if (!file) return;
+  if (fileName) fileName.textContent = file.name;
+  fileInput.value = '';
+  analyzeFile(file);
+});
 
 // The copy button lives inside #results and is recreated on every render, so catch
 // it by delegation on the stable ancestor - same pattern app.js uses for its own.

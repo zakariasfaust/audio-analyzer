@@ -222,17 +222,44 @@ dt[title], th[title], h2[title], h3[title], span[title] {
 
 /* --- Uploaded-file analysis (rendered into #results by file.js) ------- */
 
-#file-form {
-  margin: 0.75rem 0 0;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.5rem;
+#file-row {
+  margin: 0.7rem 0 0;
   font-size: 0.9rem;
+  color: #555;
 }
 
-#file-form label {
-  color: #555;
+/* A label that reads as a button without copying the OS buttons exactly -
+   flat and neutral is enough to say "click here". */
+#file-pick {
+  display: inline-block;
+  margin: 0 0.4rem;
+  padding: 0.2rem 0.7rem;
+  border: 1px solid #999;
+  border-radius: 3px;
+  background: #f0f0f0;
+  color: #111;
+  cursor: pointer;
+}
+
+#file-pick:hover {
+  background: #e6e6e6;
+}
+
+/* The real <input> is visually-hidden but still tab-focusable; surface its focus
+   ring on the label that stands in for it. */
+#file-row:focus-within #file-pick {
+  outline: 2px solid #0b6bcb;
+  outline-offset: 1px;
+}
+
+#file-pick.busy {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+#file-name {
+  font-family: monospace;
+  color: #333;
 }
 
 canvas.analysis-chart {
