@@ -6,8 +6,8 @@
 //
 // Everything lives in this browser tab. No server-side job, no database, no schedule:
 // the page records a slice of the stream on a timer, measures it, and keeps the
-// results in memory (mirrored to localStorage). Close the tab without exporting and
-// the log is gone - hence the export buttons and the beforeunload guard.
+// results in memory. Close the tab without exporting and the log is gone - hence the
+// export buttons and the beforeunload guard.
 
 // ---------------------------------------------------------------------
 // Tunables
@@ -43,7 +43,6 @@ const CLIPPING_DBTP = -1;
 
 const WARN_AFTER_HOURS = 24;
 const MAX_TABLE_ROWS = 200;
-const STORAGE_KEY = 'audio-analyzer-log-v1';
 
 // Stop logging automatically after this many *consecutive* polls that couldn't even
 // reach our own backend (not a stream error - fetch() itself failed, e.g. the server
@@ -908,29 +907,12 @@ function renderAll() {
   updateButtons();
 }
 
-// ---------------------------------------------------------------------
-// Persistence - a mirror, never an autoloader
-// ---------------------------------------------------------------------
-
-function persist() {
-  try {
-    localStorage.setItem(
-      STORAGE_KEY,
-      JSON.stringify({ savedAt: new Date().toISOString(), session: logSession, entries: logEntries, events: logEvents })
-    );
-  } catch {
-    // Quota exceeded or storage disabled. The in-memory log still works and saying so
-    // on every append would be noise - export is the real safety net.
-  }
-}
-
-function clearPersisted() {
-  try {
-    localStorage.removeItem(STORAGE_KEY);
-  } catch {
-    /* nothing to do */
-  }
-}
+// The log used to be mirrored to localStorage on every poll. Nothing ever read it back:
+// there was no restore path, and starting a log always starts fresh by design (a log
+// with a hole in it would misrepresent what happened). So it re-serialised the whole
+// growing log - megabytes after a day - every 15 seconds, to a key nothing loaded, and
+// swallowed the quota error that eventually came. Removed rather than completed: the
+// JSON/CSV export is the durable copy, and it already exists.
 
 // ---------------------------------------------------------------------
 // The log view, rendered into the shared results area
@@ -1026,7 +1008,6 @@ function buildShell(resultsEl) {
     if (!text) return;
     logEvents.push({ type: 'note', t: new Date().toISOString(), text });
     logDirty = true;
-    persist();
     renderAll();
   });
 
@@ -1061,7 +1042,6 @@ function buildShell(resultsEl) {
     logEvents = [];
     logDirty = false;
     warningDismissed = false;
-    clearPersisted();
     renderAll();
   });
 
@@ -1118,7 +1098,6 @@ function appendEntry(entry) {
   logEntries.push(entry);
   logEvents.push(...derivePointEvents(prev, entry, logSession || {}));
   logDirty = true;
-  persist();
 
   if (entry.status === 'no-connection' && consecutiveNoConnectionCount(logEntries) >= MAX_CONSECUTIVE_NO_CONNECTION) {
     stopLoggingForUnreachableBackend();
@@ -1222,13 +1201,18 @@ function exportStamp() {
 async function startStreamLog(targetUrl, { statusEl, resultsEl } = {}) {
   stopStreamLog();
 
+  // Taken before the await below, not after it. Until the first poll runs there is no
+  // timer and logRunning is false, so stopStreamLog() from another view is a no-op -
+  // which is how a log still checking its stream used to wipe a finished analysis the
+  // moment its own /api/analyze came back. See claimResults() in shared.js.
+  const myToken = claimResults();
+
   logEntries = [];
   logEvents = [];
   logDirty = false;
   warningDismissed = false;
   eventTypeFilter = new Set(ALL_EVENT_TYPES);
   logShellBuilt = false;
-  clearPersisted();
 
   const results = resultsEl || el('results');
   if (!results) return;
@@ -1247,6 +1231,7 @@ async function startStreamLog(targetUrl, { statusEl, resultsEl } = {}) {
       body: JSON.stringify({ url: targetUrl }),
     });
     data = await res.json();
+    if (!ownsResults(myToken)) return;
     if (!res.ok) {
       if (statusEl) statusEl.textContent = '';
       results.innerHTML = `<section><h2 class="error">Fel</h2><p class="error">${esc(
@@ -1255,6 +1240,7 @@ async function startStreamLog(targetUrl, { statusEl, resultsEl } = {}) {
       return;
     }
   } catch (err) {
+    if (!ownsResults(myToken)) return;
     if (statusEl) statusEl.textContent = '';
     results.innerHTML = `<section><h2 class="error">Fel</h2><p class="error">${esc(
       'Kunde inte nå servern: ' + err.message

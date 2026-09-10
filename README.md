@@ -16,6 +16,15 @@ entirely in the browser tab.
 The stream type is detected automatically from the response (Content-Type and
 `icy-*` headers, then a small body peek), so the same URL field takes any of them.
 
+Or **upload an audio file** (wav, flac, mp3, aac, ogg, m4a …) with the file
+picker below the URL field: it is measured whole - all metadata (codec, bit
+depth declared vs. actually used, tags, cover art, chapters), a loudness/true-peak
+curve over the file, loudness range (LRA), PLR, DC offset, crest factor, clipped
+samples, a stereo-correlation reading (−1..+1, silence excluded) with the real
+out-of-phase / mono stretches listed, and a spectrogram. Uploads are capped at
+`MAX_UPLOAD_BYTES` (1 GB) and files longer than 130 min are analysed to that
+point. Non-audio files just say so.
+
 ## Why a backend?
 
 Most CDNs (e.g. Akamai) don't send CORS headers on their manifests,
@@ -75,6 +84,14 @@ the app's own root path every 30s.
 | `MEMORY_RATIO_THRESHOLD` | `0.8` | Reject a new job once cgroup memory usage reaches this fraction of the container's limit (Linux/Docker only). |
 | `MAX_RSS_BYTES` | `450 * 1024 * 1024` | Fallback memory ceiling (Node process RSS only) when no cgroup is readable, e.g. local dev. |
 | `REQUEST_DEADLINE_MS` | `90000` | Hard wall-clock ceiling per request; aborts in-flight work past this. |
+| `MAX_UPLOAD_BYTES` | `1024 * 1024 * 1024` | Cap on an uploaded file for `/api/analyze-file`. Streamed to a temp file, never buffered in memory - so this bounds disk, and `MAX_CONCURRENT_FILE_JOBS` bounds how many of them at once. |
+| `MAX_CONCURRENT_FILE_JOBS` | `3` | File analyses at once, on top of `MAX_CONCURRENT_JOBS`. The global slots are sized for stream logs; a file job holds up to `MAX_UPLOAD_BYTES` of temp disk for minutes. |
+| `UPLOAD_IDLE_TIMEOUT_MS` | `30000` | Abort an upload that stops sending bytes for this long. Reset by every chunk, so a slow but progressing upload is unaffected. |
+| `FFPROBE_FILE_TIMEOUT_MS` | `60000` | Ceiling for the ffprobe run over an uploaded file (the generic 10 s `TIMEOUT_MS` is sized for network reads). |
+| `FILE_ANALYSIS_MAX_SECONDS` | `7800` | How much of a long upload is decoded (130 min). Past this the result is marked truncated. |
+| `SPECTROGRAM_MAX_SECONDS` | `600` | Window for the spectrogram + the mid/side levels behind the stereo-correlation reading (a mix's width is near-constant, so a slice is enough). |
+| `FILE_ANALYSIS_TIMEOUT_MS` | `600000` | Per-child ceiling for the two file-analysis ffmpeg passes (they run in parallel). |
+| `FILE_REQUEST_DEADLINE_MS` | `660000` | `REQUEST_DEADLINE_MS` for `/api/analyze-file` only - a full-file decode is minutes. |
 
 ## Testing
 
@@ -97,6 +114,16 @@ that needs a real stream is left to manual verification:
 2. Test a failure case by pasting in a URL that returns 404 or points to
    a page that is neither an M3U8 nor an MPD - the error should display readably,
    the page should never go blank.
+3. Upload an audio file (mp3/wav/flac/m4a/ogg): metadata, the loudness curve, the
+   dynamics numbers and the spectrogram should render. Cross-check LUFS/LRA against
+   `ffmpeg -i <file> -af loudnorm=print_format=json -f null -`. Upload a `.txt` or a
+   video without audio - it should say "not an audio file", never go blank.
+4. The three views share one results area and each awaits a request before rendering,
+   which no test covers (the frontend tests call render functions directly, with a stub
+   DOM). Start a stream analysis and pick a file while it loads - the stream **Analysera**
+   button (an upload has none; it auto-analyses) must still be clickable afterwards. Click
+   Logga and then Analysera immediately - the analysis must survive the log's own startup
+   request completing behind it.
 
 ## Good to know
 
@@ -136,17 +163,22 @@ that needs a real stream is left to manual verification:
 - **Silence and outage are different findings** and are listed separately. Silence
   means the stream answered and the audio arrived but was quiet - the broadcast
   lost its content while the server kept working. Outage means the request itself
-  failed. Silence means audio below -50 dB for at least 2 seconds; a stream can be
-  inaudibly quiet without crossing that line, and true digital silence reports a
-  true peak of -inf, shown as "no signal at all" rather than as a missing value.
+  failed. Silence means audio below -50 dB for at least `SILENCE_MIN_DURATION_SEC`
+  (0.5 s, see above); a stream can be inaudibly quiet without crossing that line, and
+  true digital silence reports a true peak of -inf, shown as "no signal at all"
+  rather than as a missing value.
 - **The log lives in the browser tab.** No database, no server-side scheduler, no
-  account. It is mirrored to `localStorage` so a reload can offer to restore it
-  (never silently), warns before you close an unexported log, and nags after 24
-  hours - but the only durable copy is the JSON or CSV you export.
-- **LRA (loudness range) is not measured.** It is only meaningful over long,
-  varied material, and `ebur128` prints it whether we ask or not - so it is
-  parsed out and ignored rather than displayed as a number that would not mean
-  what it looks like.
+  account, and nothing is written to `localStorage`. It warns before you close an
+  unexported log and nags after 24 hours - but the only durable copy is the JSON or
+  CSV you export, and closing the tab loses everything else.
+- **LRA (loudness range) is measured for an uploaded file, not for a stream.** Over a
+  whole track it is exactly the "how dynamic is this" number; over a 15-second stream
+  window it is noise, so the stream path parses it out and ignores it rather than
+  displaying a number that would not mean what it looks like.
+- **Bit depth is only reported for integer PCM** (WAV, FLAC, AIFF). MP3/AAC decode to
+  float and have no bit depth at all; the reading available there describes ffmpeg's
+  own decode buffer, not the file, so the file view says the field does not apply
+  instead of printing that number.
 - **Loudness drift logging is off by default.** Most streams sit outside any given
   target most of the time, so flagging every deviation buries the events that
   matter. Switch it on and set the target in LUFS and the tolerance in LU (the
@@ -193,13 +225,30 @@ exception. What is in place, and where it stops:
   those two the up-front check is the only layer - which is why it is called with
   `failClosed` there: a DNS failure refuses the request rather than waving it
   through. They also run with an explicit `-protocol_whitelist` that excludes
-  `file`, so a hostile manifest cannot point its segments at a local path. A
-  determined DNS-rebinding attack against ffmpeg is still not fully closed.
+  `file`, so a hostile manifest cannot point its segments at a local path.
+  **What is not closed:** `assertPublicHost` only ever sees the top-level URL. The
+  URIs *inside* a manifest are resolved and fetched by ffmpeg itself, outside
+  anything Node can inspect, so a hostile manifest whose segments point at
+  `http://10.0.0.5/` is fetched unchecked - a blind SSRF (ffprobe reports codec
+  information, not response bodies) that also serves as an internal port scanner.
+  DNS rebinding against ffmpeg is open for the same reason. Closing it properly
+  needs an egress policy that blocks private ranges at the container/network level,
+  or forcing ffmpeg through a proxy of our own; neither is in the app.
 - **Response size limits** - manifests are capped at 10 MB, MPDs at 1 MB (XML parses
   into an object graph far larger than its byte size), and a SegmentTimeline at
   50 000 `<S>` rows.
 - **Recording is capped** - `/api/sample` records audio only (no video), 15s max,
   50 MB max.
+- **Uploads are capped and never buffered** - `/api/analyze-file` streams the request
+  body straight to a temp file, rejecting with 413 once `MAX_UPLOAD_BYTES` (1 GB) is
+  exceeded, so a hostile large upload costs one aborted connection, not memory. Because
+  that bounds disk rather than RAM, `MAX_CONCURRENT_FILE_JOBS` (3) bounds how many can
+  run at once, and `UPLOAD_IDLE_TIMEOUT_MS` (30 s) drops a connection that stops sending
+  - without it, a few deliberately stalled uploads would hold every file slot for the
+  full request deadline. The decode passes are bounded by `FILE_ANALYSIS_MAX_SECONDS`
+  and run under the same `-protocol_whitelist file` as the loudness pass. The filename
+  query parameter is display-only; the temp file always gets a server-generated name,
+  and stale temp files from a previous kill are swept at startup.
 - **Browser-side** - a strict Content-Security-Policy (`default-src 'self'`) plus the
   rest of helmet's defaults. The page renders remote-controlled strings, so every URL
   that becomes a link is scheme-checked first; escaping alone does not stop

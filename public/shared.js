@@ -78,3 +78,75 @@ function withHint(tag, label, key) {
   return `<${tag}${titleAttr}>${esc(label)}</${tag}>`;
 }
 
+// ---------------------------------------------------------------------
+// Fields: one description, two outputs
+// ---------------------------------------------------------------------
+//
+// Every value on this page is shown twice - as a <dl> row, and as a line in the text
+// the Copy button produces - and they were written out separately in each place. They
+// drifted, as duplicated lists do: the HLS copy text grew an Expires line the other two
+// silently lacked, and the file view's copy text quietly omitted rows the page showed.
+//
+// A field is described once and both outputs are derived from it. `text` is the plain
+// value, already formatted (fmtNumber/fmtDuration/…); `html` is only supplied when the
+// page shows something richer than that plain text - a warning span, a link - and its
+// producer is responsible for escaping it, like every other HTML fragment here.
+// A falsy entry in a field list is skipped, so a conditional row can be written inline.
+function field(label, termKey, text, html = null) {
+  return { label, termKey, text, html };
+}
+
+function renderDl(fields) {
+  const rows = fields
+    .filter(Boolean)
+    .map((f) => {
+      const dt = f.termKey ? withHint('dt', f.label, f.termKey) : `<dt>${esc(f.label)}</dt>`;
+      return `${dt}<dd>${f.html ?? esc(f.text)}</dd>`;
+    })
+    .join('');
+  return `<dl>${rows}</dl>`;
+}
+
+function copyFields(add, fields) {
+  for (const f of fields.filter(Boolean)) add(`${f.label}: ${f.text}`);
+}
+
+// ---------------------------------------------------------------------
+// Who owns #results
+// ---------------------------------------------------------------------
+//
+// Three views write into the same results area - the snapshot (app.js), the stream
+// log (log.js) and the uploaded-file view (file.js) - and each of them awaits a
+// request before it renders. Whoever is about to write takes the token first; anyone
+// holding an older one stops touching shared state instead of overwriting the newer
+// view's output.
+//
+// One token, not three: with a counter per view, "did someone else take over?" had no
+// single answer, and each view could only invalidate itself. That left two real bugs -
+// a log still starting up would wipe a finished analysis (its own stopStreamLog() is a
+// no-op before the first poll), and an analysis cancelled by the file view left the
+// Analysera button disabled with nothing left to re-enable it.
+//
+// Claiming also resets the chrome shared by all three (the button, the status line,
+// the master→variant note), so no view can strand it in its own state. The new owner
+// sets whatever it needs immediately after claiming.
+let viewToken = 0;
+
+function claimResults() {
+  viewToken++;
+  const btn = document.getElementById('analyze-btn');
+  if (btn) btn.disabled = false;
+  const status = document.getElementById('status');
+  if (status) status.textContent = '';
+  const info = document.getElementById('analyzed-url-info');
+  if (info) {
+    info.textContent = '';
+    info.hidden = true;
+  }
+  return viewToken;
+}
+
+function ownsResults(token) {
+  return token === viewToken;
+}
+

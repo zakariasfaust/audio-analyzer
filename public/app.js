@@ -127,25 +127,22 @@ function renderVariants(v, activeUrl) {
     </section>`;
 }
 
+// The audio-track rows, described once - renderAudio() lays them out and addAudio()
+// writes them as text, for all four views. See field() in shared.js.
+function audioFields(a) {
+  return [
+    field('Codec', 'codec', (a.codec || '–') + (a.profile ? ` (${a.profile})` : '')),
+    field('Samplingsfrekvens', 'samplingsfrekvens', a.sampleRate ? fmtInt(a.sampleRate) + ' Hz' : '–'),
+    field('Kanaler', 'kanaler', `${a.channels ?? '–'}${a.channelLayout ? ` (${a.channelLayout})` : ''}`),
+    field('Bitrate', 'audio-bitrate', a.bitRate ? fmtNumber(a.bitRate / 1000) + ' kbit/s' : 'okänd (se uppmätt bitrate nedan)'),
+    field('Container', 'container', a.container || '–'),
+  ];
+}
+
 function renderAudio(a) {
-  if (!a) {
-    return `
-      <section id="sec-audio">
-        ${withHint('h2', 'Ljudspåret', 'ljud')}
-        <p class="note">Kunde inte hämtas (se varningar ovan).</p>
-      </section>`;
-  }
-  return `
-    <section id="sec-audio">
-      ${withHint('h2', 'Ljudspåret', 'ljud')}
-      <dl>
-        ${withHint('dt', 'Codec', 'codec')}<dd>${esc(a.codec) || '–'}${a.profile ? ' (' + esc(a.profile) + ')' : ''}</dd>
-        ${withHint('dt', 'Samplingsfrekvens', 'samplingsfrekvens')}<dd>${a.sampleRate ? fmtInt(a.sampleRate) + ' Hz' : '–'}</dd>
-        ${withHint('dt', 'Kanaler', 'kanaler')}<dd>${a.channels ?? '–'}${a.channelLayout ? ' (' + esc(a.channelLayout) + ')' : ''}</dd>
-        ${withHint('dt', 'Bitrate', 'audio-bitrate')}<dd>${a.bitRate ? fmtNumber(a.bitRate / 1000) + ' kbit/s' : 'okänd (se uppmätt bitrate nedan)'}</dd>
-        ${withHint('dt', 'Container', 'container')}<dd>${esc(a.container) || '–'}</dd>
-      </dl>
-    </section>`;
+  const head = withHint('h2', 'Ljudspåret', 'ljud');
+  const body = a ? renderDl(audioFields(a)) : '<p class="note">Kunde inte hämtas (se varningar ovan).</p>';
+  return `<section id="sec-audio">${head}${body}</section>`;
 }
 
 function renderSegments(s, continuity) {
@@ -714,15 +711,8 @@ function addConnection(add, c) {
 
 function addAudio(add, a) {
   add('LJUDSPÅRET');
-  if (a) {
-    add(`Codec: ${a.codec || '–'}${a.profile ? ' (' + a.profile + ')' : ''}`);
-    add(`Samplingsfrekvens: ${a.sampleRate ? fmtInt(a.sampleRate) + ' Hz' : '–'}`);
-    add(`Kanaler: ${a.channels ?? '–'}${a.channelLayout ? ' (' + a.channelLayout + ')' : ''}`);
-    add(`Bitrate: ${a.bitRate ? fmtNumber(a.bitRate / 1000) + ' kbit/s' : 'okänd'}`);
-    add(`Container: ${a.container || '–'}`);
-  } else {
-    add('Kunde inte hämtas (se varningar).');
-  }
+  if (a) copyFields(add, audioFields(a));
+  else add('Kunde inte hämtas (se varningar).');
   add('');
 }
 
@@ -1070,19 +1060,17 @@ let currentMasterUrl = null;
 let currentAnalyzedUrl = null;
 let baseVariantsInfo = null;
 
-// Disabling the Analyze button does not stop a variant row from being clicked, and
-// the sample phase alone runs 8-20 s - so two runs could overlap. Every run takes a
-// token; when a newer run has started, the older one stops touching shared state
-// instead of overwriting the newer run's results and clearing its status line.
-let runToken = 0;
-
 async function runAnalysis(targetUrl, { isVariantSwitch = false } = {}) {
   // A running log owns #results and keeps writing to it every 15 seconds. Analysing
-  // without stopping it first would have the two overwrite each other.
+  // without stopping it first would have the two overwrite each other. claimResults()
+  // below handles a log that is still *starting*; this stops one already polling.
   if (typeof stopStreamLog === 'function') stopStreamLog();
 
-  const myToken = ++runToken;
-  const isStale = () => myToken !== runToken;
+  // Disabling the Analyze button does not stop a variant row from being clicked, and
+  // the sample phase alone runs 8-20 s - so two runs could overlap, and the log and
+  // file views can take over mid-flight too. See claimResults() in shared.js.
+  const myToken = claimResults();
+  const isStale = () => !ownsResults(myToken);
 
   if (faqEl) faqEl.open = false; // collapse the FAQ so it never buries the results
   analyzeBtn.disabled = true;
@@ -1093,12 +1081,10 @@ async function runAnalysis(targetUrl, { isVariantSwitch = false } = {}) {
   resultsEl.innerHTML = '';
 
   currentAnalyzedUrl = targetUrl;
+  // The non-variant case needs nothing: claimResults() already cleared and hid this.
   if (isVariantSwitch) {
     analyzedUrlInfoEl.innerHTML = `Master: <span class="mono">${esc(currentMasterUrl)}</span> → Analyserar: <span class="mono">${esc(targetUrl)}</span>`;
     analyzedUrlInfoEl.hidden = false;
-  } else {
-    analyzedUrlInfoEl.textContent = '';
-    analyzedUrlInfoEl.hidden = true;
   }
 
   let data;
@@ -1197,6 +1183,10 @@ async function runAnalysis(targetUrl, { isVariantSwitch = false } = {}) {
     }
   }
 
+  // Only if this run still owns the area: a newer view has already reset the chrome
+  // to suit itself (see claimResults()), and clearing its status line here would be
+  // this run reaching past the end of its own turn.
+  if (isStale()) return;
   statusEl.textContent = '';
   analyzeBtn.disabled = false;
 }
@@ -1219,9 +1209,8 @@ if (logBtn) {
     lastAnalyzeData = null;
     lastSampleData = null;
     lastSampleError = null;
-    analyzedUrlInfoEl.textContent = '';
-    analyzedUrlInfoEl.hidden = true;
     currentAnalyzedUrl = url;
+    // startStreamLog claims #results itself, which clears the master→variant note.
     startStreamLog(url, { statusEl, resultsEl });
   });
 }

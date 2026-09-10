@@ -41,6 +41,79 @@ export const MAX_TIMELINE_ENTRIES = 50_000;
 // Hard cap on the recorded sample regardless of the bitrate the stream claims.
 export const MAX_SAMPLE_FILE_BYTES = 50 * 1024 * 1024;
 
+// --- Uploaded-file analysis (Fas 4) -----------------------------------------
+// A file is streamed straight to a temp file (never buffered in memory), so this
+// bounds disk, not RAM - but a huge upload still costs a decode pass, so it is
+// capped anyway.
+//
+// 1 GB, not the 100 MB this shipped with: the audience uploads masters, and 100 MB
+// is 6.1 minutes of 24-bit/48 kHz WAV or 3.0 minutes of 24/96 - it rejected ordinary
+// single tracks. It also made FILE_ANALYSIS_MAX_SECONDS below unreachable, since even
+// 130 minutes of 128 kbps MP3 is 119 MB, so the documented "long files are analysed to
+// 130 min" could never happen. At 1 GB both hold: ~60 min of 24/48 WAV, and the
+// 130-minute ceiling is reachable for compressed formats.
+//
+// Disk, not memory, is what bounds this - see MAX_CONCURRENT_FILE_JOBS below, which is
+// what keeps N concurrent uploads from multiplying this into the whole filesystem.
+export const MAX_UPLOAD_BYTES = envNumber('MAX_UPLOAD_BYTES', 1024 * 1024 * 1024);
+
+// Upload analyses running at once, on top of the global MAX_CONCURRENT_JOBS. The 12
+// global slots are sized for stream logs, which cost a 15-second recording each; a file
+// job holds up to MAX_UPLOAD_BYTES of temp disk for minutes, so 12 of them at 1 GB each
+// would be 12 GB. Three keeps the worst case at ~3 GB while leaving the stream-log
+// budget untouched.
+export const MAX_CONCURRENT_FILE_JOBS = envNumber('MAX_CONCURRENT_FILE_JOBS', 3);
+
+// Abort an upload that stops delivering bytes for this long. The request-level deadline
+// (FILE_REQUEST_DEADLINE_MS, 11 minutes) is sized for the decode, so without this a
+// handful of deliberately stalled uploads could hold every file slot for eleven minutes
+// each - the cheapest denial of service against this app. An idle timeout is the right
+// shape rather than a flat one: a genuinely slow but progressing 1 GB upload keeps
+// resetting it, while one that dribbles a byte and waits does not.
+export const UPLOAD_IDLE_TIMEOUT_MS = envNumber('UPLOAD_IDLE_TIMEOUT_MS', 30_000);
+
+// How much audio the loudness/astats/phase pass will actually decode. A 2-hour
+// podcast at real-time-ish decode speed would blow past any sane request budget,
+// so the analysis is of the first N seconds and the response says so. 130 min
+// covers a long album or DJ set whole.
+export const FILE_ANALYSIS_MAX_SECONDS = envNumber('FILE_ANALYSIS_MAX_SECONDS', 7800);
+
+// The spectrogram + the mid/side levels behind the stereo-correlation estimate get
+// their own, much shorter window: a mix's overall width is near-constant across a
+// track, so a slice is as telling as the whole thing at a fraction of the decode.
+export const SPECTROGRAM_MAX_SECONDS = envNumber('SPECTROGRAM_MAX_SECONDS', 600);
+
+// Ceiling for the ffprobe run over an uploaded file. Its own constant rather than
+// the generic TIMEOUT_MS (10s, sized for network reads): reading the header of a
+// large local file is disk work, and a legitimate multi-hundred-MB upload that took
+// 11s to probe used to be reported as a network timeout. Still far below the decode
+// passes below - a probe that takes a minute is wedged, not slow.
+export const FFPROBE_FILE_TIMEOUT_MS = envNumber('FFPROBE_FILE_TIMEOUT_MS', 60_000);
+
+// Per-child ceiling for the two file-analysis ffmpeg passes. Far longer than
+// TIMEOUT_MS (10s, sized for network reads) because decoding 130 min of audio is
+// minutes of CPU, not seconds. The passes run in parallel, so wall time is the
+// slower of the two, not the sum.
+export const FILE_ANALYSIS_TIMEOUT_MS = envNumber('FILE_ANALYSIS_TIMEOUT_MS', 600_000);
+
+// Request-level ceiling for POST /api/analyze-file specifically - the generic
+// REQUEST_DEADLINE_MS (90s) would kill a legitimate long-file analysis. Slightly
+// above FILE_ANALYSIS_TIMEOUT_MS so a child that hits its own timeout produces the
+// specific error rather than being cut off by the request deadline first.
+export const FILE_REQUEST_DEADLINE_MS = envNumber('FILE_REQUEST_DEADLINE_MS', 660_000);
+
+// ebur128 framelog=info writes one line per ~100ms, so the real worst case - 130 min,
+// ~78 000 lines of ~140 characters - is about 9 MB of stderr, past which the frame log
+// (and the Summary after it) would be truncated. The file-analysis pass raises
+// runChildProcess's output cap to this to leave headroom.
+//
+// 16 MB, not the 64 MB this shipped with: this is held as one string per running job,
+// and an unbounded-in-practice per-job allocation multiplied by the concurrency limit is
+// exactly the shape that OOM-killed this container once already. 16 MB is comfortably
+// above the real ceiling while still stopping a corrupt file that makes ffmpeg emit a
+// warning per frame from growing without limit.
+export const FILE_ANALYSIS_MAX_STDERR_BYTES = envNumber('FILE_ANALYSIS_MAX_STDERR_BYTES', 16 * 1024 * 1024);
+
 // Safety cap on how far into the audio body we'll read hunting for the first ICY
 // metadata block. icy-metaint is typically 8-16 KB, so this covers a couple of
 // intervals even on a low-bitrate stream while bounding memory hard.
