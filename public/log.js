@@ -63,22 +63,21 @@ const CHART_COLORS = {
   axis: '#999',
 };
 
-const GAP_LABELS = {
-  silence: 'Tystnad',
-  outage: 'Strömmen nere',
-};
+// Wording for the gap/event type codes. Every sentence the user reads is built here,
+// from the catalog, the same dashAddressingLabel() pattern app.js uses: t() falls back
+// to the raw key on a miss, so a resolved lookup is distinguished by comparing the
+// result to the key itself, then the type code itself is the last-resort fallback.
+const ALL_EVENT_TYPES = ['metadata-change', 'format-change', 'clipping', 'loudness-drift', 'note', 'silence', 'outage'];
 
-const EVENT_LABELS = {
-  'metadata-change': 'Metadataförändring',
-  'format-change': 'Formatändring',
-  clipping: 'Klippning',
-  'loudness-drift': 'Nivåavvikelse',
-  note: 'Anteckning',
-  silence: 'Tystnad',
-  outage: 'Strömmen nere',
-};
+function gapLabel(type) {
+  const key = `log.gapLabels.${type}`;
+  return t(key) !== key ? t(key) : type;
+}
 
-const ALL_EVENT_TYPES = Object.keys(EVENT_LABELS);
+function eventLabel(type) {
+  const key = `log.eventLabels.${type}`;
+  return t(key) !== key ? t(key) : type;
+}
 
 // ---------------------------------------------------------------------
 // State
@@ -143,8 +142,11 @@ function nowPlayingFromSample(sampleBody) {
   return null;
 }
 
-function toLogEntry(sampleBody, { t, ok, status, attemptedAtMs, errorMessage = null } = {}) {
-  const attempted = typeof attemptedAtMs === 'number' ? attemptedAtMs : Date.parse(t);
+// `t` is destructured as `requestedAt` - not as `t` - because that name would shadow
+// the global translate function t() for the rest of this function body, and the
+// fallback errorMessage below needs it.
+function toLogEntry(sampleBody, { t: requestedAt, ok, status, attemptedAtMs, errorMessage = null } = {}) {
+  const attempted = typeof attemptedAtMs === 'number' ? attemptedAtMs : Date.parse(requestedAt);
   // `status` is the richer classification; `ok` stays the primary boolean every
   // other function already checks. Callers that only ever knew about ok/failed
   // (existing tests included) get exactly the old behaviour for free.
@@ -152,7 +154,7 @@ function toLogEntry(sampleBody, { t, ok, status, attemptedAtMs, errorMessage = n
 
   if (resolvedStatus !== 'ok' || !sampleBody) {
     return {
-      t,
+      t: requestedAt,
       attemptedAtMs: attempted,
       recordedAtMs: null,
       ok: false,
@@ -171,10 +173,10 @@ function toLogEntry(sampleBody, { t, ok, status, attemptedAtMs, errorMessage = n
       errorMessage:
         errorMessage ||
         (resolvedStatus === 'busy'
-          ? 'Servern upptagen.'
+          ? t('log.entryErrors.busy')
           : resolvedStatus === 'no-connection'
-          ? 'Kunde inte nå servern.'
-          : 'Okänt fel'),
+          ? t('log.entryErrors.noConnection')
+          : t('log.entryErrors.unknown')),
     };
   }
 
@@ -188,7 +190,7 @@ function toLogEntry(sampleBody, { t, ok, status, attemptedAtMs, errorMessage = n
   const silences = absoluteSilences(loudness, anchorMs, windowSec);
 
   return {
-    t: sampleBody.recordedAt || t,
+    t: sampleBody.recordedAt || requestedAt,
     attemptedAtMs: attempted,
     recordedAtMs: anchorMs,
     ok: true,
@@ -373,13 +375,20 @@ function derivePointEvents(prev, entry, session = {}) {
       events.push({
         type: 'format-change',
         t: entry.t,
-        text: `${prev.codec} ${prev.sampleRate} Hz ${prev.channels} kanal(er) → ${entry.codec} ${entry.sampleRate} Hz ${entry.channels} kanal(er)`,
+        text: t('log.events.formatChangeText', {
+          prevCodec: prev.codec,
+          prevRate: prev.sampleRate,
+          prevChannels: prev.channels,
+          codec: entry.codec,
+          rate: entry.sampleRate,
+          channels: entry.channels,
+        }),
       });
     }
   }
 
   if (typeof entry.truePeak === 'number' && entry.truePeak > CLIPPING_DBTP) {
-    events.push({ type: 'clipping', t: entry.t, text: `True peak ${entry.truePeak.toFixed(1)} dBTP` });
+    events.push({ type: 'clipping', t: entry.t, text: t('log.events.clippingText', { value: entry.truePeak.toFixed(1) }) });
   }
 
   // Off unless the user turned it on: most streams sit outside any given target most
@@ -391,7 +400,7 @@ function derivePointEvents(prev, entry, session = {}) {
         events.push({
           type: 'loudness-drift',
           t: entry.t,
-          text: `${entry.lufsI.toFixed(1)} LUFS (mål ${targetLufs} ±${toleranceLu} LU)`,
+          text: t('log.events.driftText', { lufs: entry.lufsI.toFixed(1), target: targetLufs, tolerance: toleranceLu }),
         });
       }
     }
@@ -448,22 +457,25 @@ function shouldWarnLongSession(startedAt, now, thresholdHours = WARN_AFTER_HOURS
 }
 
 // Semicolon-separated with a dot decimal: opens straight into Swedish Excel without
-// the import wizard, while staying machine-readable everywhere else.
+// the import wizard, while staying machine-readable everywhere else. The column names
+// follow the active UI language (see log.csv.* in the catalogs) - a product decision,
+// not an oversight: t() reads the current locale at call time, so this needs no locale
+// parameter of its own.
 function toCsv(entries) {
   const header = [
-    'tid',
-    'strom_ok',
-    'status',
-    'lufs_i',
-    'true_peak_dbtp',
-    'tystnad_sek',
-    'fonster_sek',
-    'bitrate_kbps',
-    'codec',
-    'samplingsfrekvens',
-    'kanaler',
-    'nu_spelas',
-    'anmarkning',
+    t('log.csv.tid'),
+    t('log.csv.stromOk'),
+    t('log.csv.status'),
+    t('log.csv.lufsI'),
+    t('log.csv.truePeakDbtp'),
+    t('log.csv.tystnadSek'),
+    t('log.csv.fonsterSek'),
+    t('log.csv.bitrateKbps'),
+    t('log.csv.codec'),
+    t('log.csv.samplingsfrekvens'),
+    t('log.csv.kanaler'),
+    t('log.csv.nuSpelas'),
+    t('log.csv.anmarkning'),
   ];
   const quote = (text) => (/[";\n\r]/.test(text) ? '"' + text.replace(/"/g, '""') + '"' : text);
   const cell = (value) => (value === null || value === undefined ? '' : quote(String(value)));
@@ -531,30 +543,38 @@ function renderSummary(stats) {
   // different things: one is our server being momentarily busy, the other is it
   // being unreachable altogether (which also auto-stops the log - see runCycle()).
   const skipNotes = [
-    stats.busyCount ? `${fmtInt(stats.busyCount)} p.g.a. serverbelastning` : null,
-    stats.noConnectionCount ? `${fmtInt(stats.noConnectionCount)} p.g.a. att servern inte kunde nås` : null,
+    stats.busyCount ? t('log.summary.busySkipped', { count: fmtInt(stats.busyCount) }) : null,
+    stats.noConnectionCount ? t('log.summary.noConnectionSkipped', { count: fmtInt(stats.noConnectionCount) }) : null,
   ].filter(Boolean);
-  const skipNote = skipNotes.length ? ` (${skipNotes.join(', ')} hoppade över)` : '';
+  const skipNote = skipNotes.length ? t('log.summary.skippedSuffix', { notes: skipNotes.join(', ') }) : '';
 
   container.innerHTML = `
     <section>
-      <h2>Sammanfattning</h2>
+      <h2>${esc(t('log.summary.heading'))}</h2>
       <dl>
-        <dt>Loggat sedan</dt><dd>${fmtDuration(stats.sessionSec)}${logRunning ? '' : ' (stoppad)'}</dd>
-        <dt>Mätningar</dt><dd>${fmtInt(stats.pollCount)} st, ${fmtNumber(stats.okPercent, 0)} % lyckade${skipNote}</dd>
-        ${withHint('dt', 'Medel-LUFS', 'medel-lufs')}<dd>${
+        <dt>${esc(t('log.summary.loggedSince'))}</dt><dd>${fmtDuration(stats.sessionSec)}${
+          logRunning ? '' : esc(t('log.summary.stoppedSuffix'))
+        }</dd>
+        <dt>${esc(t('log.summary.measurements'))}</dt><dd>${esc(
+          t('log.summary.measurementsValue', { count: fmtInt(stats.pollCount), percent: fmtNumber(stats.okPercent, 0) })
+        )}${esc(skipNote)}</dd>
+        ${withHint('dt', t('log.summary.meanLufs'), 'medel-lufs')}<dd>${
           stats.meanLufs === null ? '–' : fmtNumber(stats.meanLufs) + ' LUFS'
         }</dd>
-        <dt>Medelbitrate</dt><dd>${
+        <dt>${esc(t('log.summary.meanBitrate'))}</dt><dd>${
           stats.meanBitrateKbps === null ? '–' : fmtNumber(stats.meanBitrateKbps) + ' kbit/s'
         }</dd>
-        ${withHint('dt', 'Längsta tystnad', 'verklig-tystnad')}<dd>${
-          stats.longestSilenceSec ? fmtDuration(stats.longestSilenceSec) + ` (${stats.silenceCount} st totalt)` : 'ingen'
+        ${withHint('dt', t('log.summary.longestSilence'), 'verklig-tystnad')}<dd>${
+          stats.longestSilenceSec
+            ? fmtDuration(stats.longestSilenceSec) + esc(t('log.summary.countTotal', { count: stats.silenceCount }))
+            : esc(t('log.summary.noSilence'))
         }</dd>
-        ${withHint('dt', 'Längsta avbrott', 'strommen-nere')}<dd>${
-          stats.longestOutageSec ? fmtDuration(stats.longestOutageSec) + ` (${stats.outageCount} st totalt)` : 'inga'
+        ${withHint('dt', t('log.summary.longestOutage'), 'strommen-nere')}<dd>${
+          stats.longestOutageSec
+            ? fmtDuration(stats.longestOutageSec) + esc(t('log.summary.countTotal', { count: stats.outageCount }))
+            : esc(t('log.summary.noOutages'))
         }</dd>
-        <dt>Mätningar över ${fmtNumber(CLIPPING_DBTP)} dBTP</dt><dd>${fmtInt(stats.clippingPolls)}</dd>
+        <dt>${esc(t('log.summary.clippingLabel', { dbtp: fmtNumber(CLIPPING_DBTP) }))}</dt><dd>${fmtInt(stats.clippingPolls)}</dd>
       </dl>
     </section>`;
 }
@@ -573,9 +593,9 @@ function renderSilenceList(visible) {
     .map((gap) => {
       const cls = gap.type === 'outage' ? ' class="error"' : '';
       return `<tr>
-        <td${cls}>${esc(GAP_LABELS[gap.type] || gap.type)}</td>
+        <td${cls}>${esc(gapLabel(gap.type))}</td>
         <td>${fmtClock(gap.startMs)}</td>
-        <td>${gap.ongoing ? 'pågår' : fmtClock(gap.endMs)}</td>
+        <td>${gap.ongoing ? esc(t('log.silenceList.ongoing')) : fmtClock(gap.endMs)}</td>
         <td>${fmtDuration(gap.durationSec)}</td>
       </tr>`;
     })
@@ -584,13 +604,13 @@ function renderSilenceList(visible) {
 
   container.innerHTML = `
     <section>
-      ${withHint('h2', 'Tystnad och avbrott', 'tystnad-avbrott')}
+      ${withHint('h2', t('log.silenceList.heading'), 'tystnad-avbrott')}
       <table>
         <thead><tr>
-          ${withHint('th', 'Typ', 'tystnad-typ')}
-          ${withHint('th', 'Start', 'tystnad-start')}
-          ${withHint('th', 'Slut', 'tystnad-slut')}
-          ${withHint('th', 'Längd', 'tystnad-langd')}
+          ${withHint('th', t('log.silenceList.typeHeader'), 'tystnad-typ')}
+          ${withHint('th', t('log.silenceList.startHeader'), 'tystnad-start')}
+          ${withHint('th', t('log.silenceList.endHeader'), 'tystnad-slut')}
+          ${withHint('th', t('log.silenceList.durationHeader'), 'tystnad-langd')}
         </tr></thead>
         <tbody>${rows}</tbody>
       </table>
@@ -609,14 +629,14 @@ function renderEventFilter() {
     const checked = eventTypeFilter.has(type) ? ' checked' : '';
     return `<label class="event-filter-label">
       <input type="checkbox" class="event-filter" data-type="${esc(type)}"${checked} />
-      <span class="event-dot event-${esc(type)}"></span>${esc(EVENT_LABELS[type])}
+      <span class="event-dot event-${esc(type)}"></span>${esc(eventLabel(type))}
     </label>`;
   }).join('');
 
   return `<p id="event-filter-row" class="note">
-    Visa: ${boxes}
-    <button type="button" id="event-filter-all">Alla</button>
-    <button type="button" id="event-filter-none">Inga</button>
+    ${esc(t('log.events.filterLabel'))} ${boxes}
+    <button type="button" id="event-filter-all">${esc(t('log.events.filterAll'))}</button>
+    <button type="button" id="event-filter-none">${esc(t('log.events.filterNone'))}</button>
   </p>`;
 }
 
@@ -651,12 +671,12 @@ function renderEvents(gaps) {
           (event) =>
             `<li><span class="event-dot event-${esc(event.type)}"></span>
               <span class="mono">${fmtClock(event.t)}</span>
-              <strong>${esc(EVENT_LABELS[event.type] || event.type)}</strong> ${esc(event.text)}</li>`
+              <strong>${esc(eventLabel(event.type))}</strong> ${esc(event.text)}</li>`
         )
         .join('')}</ul>`
-    : `<p class="note">Inga händelser matchar de valda filtren.</p>`;
+    : `<p class="note">${esc(t('log.events.noneMatchFilter'))}</p>`;
 
-  container.innerHTML = `<section><h2>Händelser</h2>${renderEventFilter()}${body}</section>`;
+  container.innerHTML = `<section><h2>${esc(t('log.events.heading'))}</h2>${renderEventFilter()}${body}</section>`;
 }
 
 function renderTable() {
@@ -697,8 +717,8 @@ function renderTable() {
             ? esc(e.errorMessage)
             : e.ok
             ? e.errorMessage
-              ? 'OK (nivå ej mätt)'
-              : 'OK'
+              ? esc(t('log.table.okLevelNotMeasured'))
+              : esc(t('log.table.ok'))
             : esc(e.errorMessage)
         }</td>
       </tr>`
@@ -707,19 +727,19 @@ function renderTable() {
 
   container.innerHTML = `
     <section>
-      <h2>Mätningar</h2>
-      <p class="note">Senaste ${Math.min(logEntries.length, MAX_TABLE_ROWS)} av ${fmtInt(
-        logEntries.length
-      )}. Exporten innehåller alla.</p>
+      <h2>${esc(t('log.table.heading'))}</h2>
+      <p class="note">${esc(
+        t('log.table.showingNote', { shown: Math.min(logEntries.length, MAX_TABLE_ROWS), total: fmtInt(logEntries.length) })
+      )}</p>
       <table>
         <thead><tr>
-          <th>Tid</th>
-          ${withHint('th', 'LUFS', 'integrated-lufs')}
-          ${withHint('th', 'True peak', 'true-peak')}
-          <th>Tystnad (s)</th>
-          <th>kbit/s</th>
-          <th>Nu spelas</th>
-          ${withHint('th', 'Status ström', 'status-strom')}
+          <th>${esc(t('log.table.timeHeader'))}</th>
+          ${withHint('th', t('log.table.lufsHeader'), 'integrated-lufs')}
+          ${withHint('th', t('log.table.truePeakHeader'), 'true-peak')}
+          <th>${esc(t('log.table.silenceHeader'))}</th>
+          <th>${esc(t('log.table.bitrateHeader'))}</th>
+          <th>${esc(t('log.table.nowPlayingHeader'))}</th>
+          ${withHint('th', t('log.table.statusHeader'), 'status-strom')}
         </tr></thead>
         <tbody>${rows}</tbody>
       </table>
@@ -848,10 +868,10 @@ function drawChart(gaps) {
   const legend = el('chart-legend');
   if (legend) {
     legend.innerHTML = n
-      ? `<span class="swatch swatch-lufs"></span> Integrerad ljudnivå (LUFS)
-         <span class="swatch swatch-truepeak"></span> True peak (dBTP)
-         <span class="swatch swatch-silence"></span> Tystnad
-         <span class="swatch swatch-outage"></span> Strömmen nere`
+      ? `<span class="swatch swatch-lufs"></span> ${esc(t('log.chart.legendLufs'))}
+         <span class="swatch swatch-truepeak"></span> ${esc(t('log.chart.legendTruePeak'))}
+         <span class="swatch swatch-silence"></span> ${esc(t('log.gapLabels.silence'))}
+         <span class="swatch swatch-outage"></span> ${esc(t('log.gapLabels.outage'))}`
       : '';
   }
 }
@@ -862,10 +882,10 @@ function renderWarningBanner() {
   const show = !warningDismissed && logSession && shouldWarnLongSession(logSession.startedAt, Date.now());
   banner.hidden = !show;
   if (show) {
-    banner.innerHTML = `<p class="note error">Du har loggat i över ${WARN_AFTER_HOURS} timmar (${fmtInt(
-      logEntries.length
-    )} mätningar). Överväg att exportera och rensa — allt ligger i den här fliken.
-      <button type="button" id="log-warning-dismiss">Stäng</button></p>`;
+    banner.innerHTML = `<p class="note error">${esc(
+      t('log.warningBanner.message', { hours: WARN_AFTER_HOURS, count: fmtInt(logEntries.length) })
+    )}
+      <button type="button" id="log-warning-dismiss">${esc(t('log.warningBanner.dismiss'))}</button></p>`;
     el('log-warning-dismiss')?.addEventListener('click', () => {
       warningDismissed = true;
       renderWarningBanner();
@@ -924,22 +944,22 @@ function buildShell(resultsEl) {
   resultsEl.innerHTML = `
     <div id="log-shell">
       <div id="log-controls">
-        <button type="button" id="log-stop-btn">Stoppa loggning</button>
-        <label for="log-silence-min">Logga tystnad från
-          <input type="number" id="log-silence-min" value="20" min="5" max="3600" step="5" /> s
+        <button type="button" id="log-stop-btn">${esc(t('log.controls.stop'))}</button>
+        <label for="log-silence-min">${esc(t('log.controls.silenceFromLabel'))}
+          <input type="number" id="log-silence-min" value="20" min="5" max="3600" step="5" /> ${esc(t('units.second'))}
         </label>
         <label for="log-drift-toggle">
-          <input type="checkbox" id="log-drift-toggle" /> Logga nivåavvikelse
+          <input type="checkbox" id="log-drift-toggle" /> ${esc(t('log.controls.driftToggle'))}
         </label>
         <span id="log-drift-fields" hidden>
-          mål <input type="number" id="log-target-lufs" value="-16" min="-40" max="0" step="1" /> LUFS
+          ${esc(t('log.controls.driftTargetLabel'))} <input type="number" id="log-target-lufs" value="-16" min="-40" max="0" step="1" /> LUFS
           ± <input type="number" id="log-tolerance" value="2" min="0" max="20" step="0.5" /> LU
         </span>
         <span id="log-actions">
-          <button type="button" id="log-note-btn">Anteckning</button>
-          <button type="button" id="log-export-json-btn">Exportera JSON</button>
-          <button type="button" id="log-export-csv-btn">Exportera CSV</button>
-          <button type="button" id="log-clear-btn">Rensa</button>
+          <button type="button" id="log-note-btn">${esc(t('log.controls.noteBtn'))}</button>
+          <button type="button" id="log-export-json-btn">${esc(t('log.controls.exportJson'))}</button>
+          <button type="button" id="log-export-csv-btn">${esc(t('log.controls.exportCsv'))}</button>
+          <button type="button" id="log-clear-btn">${esc(t('log.controls.clear'))}</button>
         </span>
       </div>
       <p id="log-drift-help" class="note" hidden></p>
@@ -947,7 +967,7 @@ function buildShell(resultsEl) {
       <p id="log-error"></p>
       <div id="log-summary"></div>
       <section id="sec-log-chart">
-        <h2>Ljudnivå</h2>
+        <h2>${esc(t('log.chart.heading'))}</h2>
         <canvas id="log-chart" height="200"></canvas>
         <p class="note" id="chart-legend"></p>
       </section>
@@ -959,13 +979,9 @@ function buildShell(resultsEl) {
   const help = el('log-drift-help');
   if (help) {
     // Written out rather than hidden in a tooltip because the checkbox is meaningless
-    // without it - including what LU is, which is the part people trip on.
-    help.innerHTML =
-      'Flaggar varje mätning som ligger utanför ett mål du sätter, så att du ser om kanalen driver i ljudnivå över tid. ' +
-      'Målet anges i <strong>LUFS</strong> — den absoluta ljudnivån. Toleransen anges i <strong>LU</strong> (Loudness Units), ' +
-      'som är samma skala men används för <em>skillnader</em>: 1 LU = 1 dB. Mål −16 LUFS ±2 LU betyder alltså att allt mellan ' +
-      '−18 och −14 LUFS räknas som normalt. Riktvärden: −23 LUFS för broadcast enligt EBU R128, −14 till −16 LUFS för ' +
-      'streamingtjänster. Av som standard, eftersom de flesta strömmar ligger utanför ett godtyckligt mål större delen av tiden.';
+    // without it - including what LU is, which is the part people trip on. Trusted,
+    // developer-authored HTML from the catalog (like the FAQ), not user input.
+    help.innerHTML = t('log.controls.driftHelp');
   }
 
   el('log-stop-btn')?.addEventListener('click', () => stopStreamLog());
@@ -1004,7 +1020,7 @@ function buildShell(resultsEl) {
   el('log-tolerance')?.addEventListener('change', readDriftSettings);
 
   el('log-note-btn')?.addEventListener('click', () => {
-    const text = window.prompt('Anteckning:');
+    const text = window.prompt(t('log.controls.notePrompt'));
     if (!text) return;
     logEvents.push({ type: 'note', t: new Date().toISOString(), text });
     logDirty = true;
@@ -1013,7 +1029,7 @@ function buildShell(resultsEl) {
 
   el('log-export-json-btn')?.addEventListener('click', () => {
     download(
-      `stromlogg-${exportStamp()}.json`,
+      `${t('log.export.filenamePrefix')}-${exportStamp()}.json`,
       JSON.stringify(
         {
           exportedAt: new Date().toISOString(),
@@ -1033,11 +1049,11 @@ function buildShell(resultsEl) {
   });
 
   el('log-export-csv-btn')?.addEventListener('click', () => {
-    download(`stromlogg-${exportStamp()}.csv`, toCsv(logEntries), 'text/csv;charset=utf-8');
+    download(`${t('log.export.filenamePrefix')}-${exportStamp()}.csv`, toCsv(logEntries), 'text/csv;charset=utf-8');
   });
 
   el('log-clear-btn')?.addEventListener('click', () => {
-    if (logDirty && !window.confirm('Loggen är inte exporterad. Rensa ändå?')) return;
+    if (logDirty && !window.confirm(t('log.controls.confirmClear'))) return;
     logEntries = [];
     logEvents = [];
     logDirty = false;
@@ -1087,10 +1103,7 @@ function lastMeasuredEntry(entries) {
 // for the stream itself having gone silent or down.
 function stopLoggingForUnreachableBackend() {
   stopStreamLog();
-  showLogError(
-    'Servern svarar inte längre - loggningen stoppades automatiskt. ' +
-      'Kontrollera att servern körs, och starta loggningen igen när den är uppe.'
-  );
+  showLogError(t('log.flow.backendUnreachable'));
 }
 
 function appendEntry(entry) {
@@ -1109,7 +1122,9 @@ function appendEntry(entry) {
 
 async function pollOnce() {
   const attemptedAtMs = Date.now();
-  const t = new Date(attemptedAtMs).toISOString();
+  // Named attemptedIso, not t, so it does not shadow the global translate function
+  // t() for the rest of this function - see the same note on toLogEntry() above.
+  const attemptedIso = new Date(attemptedAtMs).toISOString();
   logAbort = new AbortController();
 
   // ?icy=1 only where it can pay off: Icecast/SHOUTcast keep "now playing" in an
@@ -1120,16 +1135,17 @@ async function pollOnce() {
   try {
     const res = await fetch(url, { signal: logAbort.signal });
     const body = await res.json();
-    if (res.ok) return toLogEntry(body, { t, ok: true, attemptedAtMs });
+    if (res.ok) return toLogEntry(body, { t: attemptedIso, ok: true, attemptedAtMs });
     // A capacity rejection is a fact about our own server load, not the stream -
-    // it must not be bookkept as an outage (see reachableEntries()).
+    // it must not be bookkept as an outage (see reachableEntries()). The branching
+    // on the BUSY code stays as-is - only the displayed text is now localized.
     const status = body?.error?.code === 'BUSY' ? 'busy' : 'failed';
     return toLogEntry(null, {
-      t,
+      t: attemptedIso,
       ok: false,
       status,
       attemptedAtMs,
-      errorMessage: body.error?.message || `Servern svarade ${res.status}.`,
+      errorMessage: body.error ? errorText(body.error) : t('log.flow.serverRespondedWith', { status: res.status }),
     });
   } catch (err) {
     // Aborting is us stopping, not the stream failing - it must not become a data point.
@@ -1140,11 +1156,11 @@ async function pollOnce() {
     // which at minimum means our server was up and answering. Tagged distinctly
     // so it is never bookkept as "strömmen nere" (see reachableEntries()).
     return toLogEntry(null, {
-      t,
+      t: attemptedIso,
       ok: false,
       status: 'no-connection',
       attemptedAtMs,
-      errorMessage: 'Kunde inte nå servern: ' + err.message,
+      errorMessage: t('error.serverUnreachable', { message: err.message }),
     });
   } finally {
     logAbort = null;
@@ -1205,7 +1221,7 @@ async function startStreamLog(targetUrl, { statusEl, resultsEl } = {}) {
   // timer and logRunning is false, so stopStreamLog() from another view is a no-op -
   // which is how a log still checking its stream used to wipe a finished analysis the
   // moment its own /api/analyze came back. See claimResults() in shared.js.
-  const myToken = claimResults();
+  const myToken = claimResults('log');
 
   logEntries = [];
   logEvents = [];
@@ -1217,7 +1233,7 @@ async function startStreamLog(targetUrl, { statusEl, resultsEl } = {}) {
   const results = resultsEl || el('results');
   if (!results) return;
 
-  if (statusEl) statusEl.textContent = 'Kontrollerar strömmen…';
+  if (statusEl) statusEl.textContent = t('log.flow.checkingStream');
   results.innerHTML = '';
 
   // One /api/analyze up front: it resolves which URL to actually record from (an HLS
@@ -1234,16 +1250,16 @@ async function startStreamLog(targetUrl, { statusEl, resultsEl } = {}) {
     if (!ownsResults(myToken)) return;
     if (!res.ok) {
       if (statusEl) statusEl.textContent = '';
-      results.innerHTML = `<section><h2 class="error">Fel</h2><p class="error">${esc(
-        data.error?.message || 'Analysen misslyckades.'
+      results.innerHTML = `<section><h2 class="error">${esc(t('error.heading'))}</h2><p class="error">${esc(
+        data.error ? errorText(data.error) : t('log.flow.analysisFailed')
       )}</p></section>`;
       return;
     }
   } catch (err) {
     if (!ownsResults(myToken)) return;
     if (statusEl) statusEl.textContent = '';
-    results.innerHTML = `<section><h2 class="error">Fel</h2><p class="error">${esc(
-      'Kunde inte nå servern: ' + err.message
+    results.innerHTML = `<section><h2 class="error">${esc(t('error.heading'))}</h2><p class="error">${esc(
+      t('error.serverUnreachable', { message: err.message })
     )}</p></section>`;
     return;
   }
@@ -1274,6 +1290,45 @@ function stopStreamLog() {
   if (logAbort) logAbort.abort();
   if (logShellBuilt) renderAll();
 }
+
+// A language switch re-renders this view in place instead of reloading the page - see
+// setLocale()/onLocaleChange() in i18n.js and claimResults(owner)/currentResultsOwner()
+// in shared.js. No-op if this view doesn't currently own #results, or its shell was
+// never built (nothing rendered yet to redo). logEntries/logEvents/logSession are never
+// touched here, so a log in progress keeps recording straight through a switch.
+//
+// buildShell() rebuilds the chrome/controls from scratch, in the new language - which
+// means it also puts every control back at its hard-coded HTML default (silence
+// threshold 20s, drift off, target -16 LUFS, tolerance 2 LU). Left alone, that would
+// silently discard whatever the user had actually set for this session the moment they
+// changed language - a worse outcome than the reload this hook exists to avoid. So the
+// current control values are read out first and written back into the rebuilt DOM
+// before readDriftSettings() syncs logSession from it and renderAll() redraws.
+onLocaleChange(() => {
+  if (currentResultsOwner() !== 'log') return;
+  const results = el('results');
+  if (!results || !logShellBuilt) return;
+
+  const silenceMin = el('log-silence-min')?.value;
+  const driftEnabled = Boolean(el('log-drift-toggle')?.checked);
+  const targetLufs = el('log-target-lufs')?.value;
+  const toleranceLu = el('log-tolerance')?.value;
+
+  buildShell(results);
+
+  if (silenceMin !== undefined) el('log-silence-min').value = silenceMin;
+  const toggle = el('log-drift-toggle');
+  if (toggle) toggle.checked = driftEnabled;
+  if (targetLufs !== undefined) el('log-target-lufs').value = targetLufs;
+  if (toleranceLu !== undefined) el('log-tolerance').value = toleranceLu;
+  const fields = el('log-drift-fields');
+  if (fields) fields.hidden = !driftEnabled;
+  const help = el('log-drift-help');
+  if (help) help.hidden = !driftEnabled;
+
+  readDriftSettings();
+  renderAll();
+});
 
 if (typeof window !== 'undefined') {
   window.addEventListener?.('beforeunload', (event) => {

@@ -94,7 +94,7 @@ test('POST /api/analyze rejects a missing url with 400 VALIDATION_ERROR', async 
 
   assert.equal(status, 400);
   assert.equal(body.error.code, 'VALIDATION_ERROR');
-  assert.match(body.error.message, /saknas/);
+  assert.equal(body.error.i18nKey, 'errors.validation.missingUrl');
 });
 
 test('POST /api/analyze rejects an unparseable url with 400 VALIDATION_ERROR', async () => {
@@ -109,7 +109,7 @@ test('POST /api/analyze rejects a non-http(s) scheme with 400', async () => {
 
   assert.equal(status, 400);
   assert.equal(body.error.code, 'VALIDATION_ERROR');
-  assert.match(body.error.message, /http/);
+  assert.equal(body.error.i18nKey, 'errors.validation.unsupportedProtocol');
 });
 
 test('GET /api/sample rejects a missing url the same way', async () => {

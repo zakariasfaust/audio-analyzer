@@ -1,16 +1,17 @@
 // shared.js
 // Helpers both pages need: the snapshot page (app.js) and the stream log (log.js).
-// A classic script like the other two, loaded first, so everything here lands in the
-// same global scope and both callers use it unchanged.
+// A classic script, loaded after i18n.js and the locale catalogs so t()/tPlural()/
+// getLocale() are available here, and before app.js/log.js/file.js so everything below
+// lands in the same global scope and both callers use it unchanged.
 //
 // esc() and safeHttpUrl() are the XSS defences for everything a remote stream server
 // sends us - station names, titles, homepage URLs. They are regression-tested in
 // test/frontend.test.js and must not be changed casually.
 
 // ---------------------------------------------------------------------
-// Formatting: Swedish convention (decimal comma, space as
-// thousands separator, YYYY-MM-DD HH:MM:SS) - keeps the numbers readable
-// for the (Swedish-speaking) audience the UI targets.
+// Formatting: number/date formatting follows the active UI language (see i18n.js).
+// Each catalog's meta.numberLocale picks the convention (decimal comma vs point,
+// thousands separator) - sv-SE by default, matching the tool's original audience.
 // ---------------------------------------------------------------------
 
 function esc(value) {
@@ -38,28 +39,35 @@ function safeHttpUrl(value) {
   }
 }
 
+function numberLocaleTag() {
+  return getCatalog(getLocale())?.meta?.numberLocale || 'en-GB';
+}
+
 function fmtNumber(n, decimals = 1) {
   if (n === null || n === undefined || Number.isNaN(n)) return '–';
-  return n.toLocaleString('sv-SE', { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
+  return n.toLocaleString(numberLocaleTag(), { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
 }
 
 function fmtInt(n) {
   if (n === null || n === undefined || Number.isNaN(n)) return '–';
-  return Math.round(n).toLocaleString('sv-SE');
+  return Math.round(n).toLocaleString(numberLocaleTag());
 }
 
-// Seconds as "12,3 s" under a minute, otherwise "X min Y s" or "X h Y min"
-// - so large delay/duration values (e.g. 10 000 s) stay easy to read.
+// Seconds as "12.3 s" under a minute, otherwise "X min Y s" or "X h Y min"
+// - so large delay/duration values (e.g. 10 000 s) stay easy to read. Unit words
+// come from the active locale's catalog (units.second/minute/hour).
 function fmtDuration(totalSeconds, decimals = 1) {
   if (totalSeconds === null || totalSeconds === undefined || Number.isNaN(totalSeconds)) return '–';
   const sign = totalSeconds < 0 ? '-' : '';
   const abs = Math.abs(totalSeconds);
-  if (abs < 60) return `${sign}${fmtNumber(abs, decimals)} s`;
+  if (abs < 60) return `${sign}${fmtNumber(abs, decimals)} ${t('units.second')}`;
   const whole = Math.round(abs);
   const h = Math.floor(whole / 3600);
   const m = Math.floor((whole % 3600) / 60);
   const s = whole % 60;
-  return h > 0 ? `${sign}${h} h ${m} min` : `${sign}${m} min ${s} s`;
+  return h > 0
+    ? `${sign}${h} ${t('units.hour')} ${m} ${t('units.minute')}`
+    : `${sign}${m} ${t('units.minute')} ${s} ${t('units.second')}`;
 }
 
 function fmtDateTime(iso) {
@@ -70,12 +78,34 @@ function fmtDateTime(iso) {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
-// Heading/value name with a hover explanation from STREAM_TERMS (terms.js), as a
-// native title tooltip. Elements without a matching key get no title attribute.
+// Heading/value name with a hover explanation from the active catalog's terms.*
+// namespace (formerly terms.js's STREAM_TERMS), as a native title tooltip. Elements
+// without a matching key get no title attribute - t()'s "return the raw key on miss"
+// fallback doubles as that check.
 function withHint(tag, label, key) {
-  const text = STREAM_TERMS[key];
-  const titleAttr = text ? ` title="${esc(text)}"` : '';
+  const termKey = 'terms.' + key;
+  const text = t(termKey);
+  const titleAttr = text !== termKey ? ` title="${esc(text)}"` : '';
   return `<${tag}${titleAttr}>${esc(label)}</${tag}>`;
+}
+
+// Turns a server AppError (or an ffmpeg.js warning object of the same shape) into
+// localized, display-ready text. err.i18nKey/err.params are what the server sends for
+// anything it wants the user to read; err.message is an English, developer-facing
+// fallback (logs, non-browser API consumers, or an older server that predates a given
+// key) used whenever no i18nKey is present or the key isn't recognised here.
+function errorText(err) {
+  if (!err) return '';
+  if (!err.i18nKey) return err.message || t('errors.unknown');
+  const params = { ...err.params };
+  // The one case where a param needs a second, code-keyed lookup before
+  // interpolation (the DNS/TLS cause code -> a human reason phrase). Extend this
+  // dispatch, don't build a generic one, if a second case ever needs it.
+  if (err.i18nKey === 'errors.upstreamUnreachable') {
+    params.reason = t(`errors.upstreamUnreachableReasons.${params.causeCode}`);
+  }
+  const translated = t(err.i18nKey, params);
+  return translated !== err.i18nKey ? translated : err.message || t('errors.unknown');
 }
 
 // ---------------------------------------------------------------------
@@ -130,10 +160,17 @@ function copyFields(add, fields) {
 // Claiming also resets the chrome shared by all three (the button, the status line,
 // the master→variant note), so no view can strand it in its own state. The new owner
 // sets whatever it needs immediately after claiming.
+//
+// `owner` ('analyze'/'log'/'file') is a second, smaller piece of the same idea: a
+// language switch (see i18n.js's onLocaleChange) needs to know which view currently
+// holds #results so it can re-render just that one from cached data, without a page
+// reload. It rides along on the same claim instead of being a separate mechanism.
 let viewToken = 0;
+let viewOwner = null;
 
-function claimResults() {
+function claimResults(owner = null) {
   viewToken++;
+  viewOwner = owner;
   const btn = document.getElementById('analyze-btn');
   if (btn) btn.disabled = false;
   const status = document.getElementById('status');
@@ -148,5 +185,9 @@ function claimResults() {
 
 function ownsResults(token) {
   return token === viewToken;
+}
+
+function currentResultsOwner() {
+  return viewOwner;
 }
 

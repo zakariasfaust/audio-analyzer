@@ -27,7 +27,8 @@ function loadFile() {
   const context = vm.createContext({
     document: { getElementById: () => element() },
     window: { devicePixelRatio: 1, addEventListener() {} },
-    navigator: { clipboard: { writeText: async () => {} } },
+    navigator: { language: 'sv', languages: ['sv'], clipboard: { writeText: async () => {} } },
+    localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
     URL,
     URLSearchParams,
     fetch: async () => {
@@ -36,9 +37,10 @@ function loadFile() {
     setTimeout,
     console,
   });
-  for (const f of ['terms.js', 'shared.js', 'app.js', 'file.js']) {
+  for (const f of ['i18n.js', 'i18n/sv.js', 'i18n/en.js', 'shared.js', 'app.js', 'file.js']) {
     vm.runInContext(fs.readFileSync(path.join(publicDir, f), 'utf8'), context, { filename: f });
   }
+  context.setLocale('sv');
   return context;
 }
 

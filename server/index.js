@@ -130,17 +130,16 @@ function makeJobGuard({ isFileJob = false } = {}) {
       // The one piece of observability the 2026-09-03 OOM postmortem flagged as
       // wanted and never built: exactly why a request was turned away, on demand
       // rather than as a constant-noise timer.
-      console.warn(`jobGuard: avvisade begäran (${decision.reason})`, decision.detail);
+      console.warn(`jobGuard: rejected request (${decision.reason})`, decision.detail);
       res.set('Retry-After', '10');
-      res.status(503).json({
-        error: {
-          code: 'BUSY',
-          message: 'Servern kör redan så många analyser den tar samtidigt. Försök igen om en liten stund.',
+      sendError(
+        res,
+        new AppError('BUSY', 'Server is already running as many concurrent analyses as it allows. Try again shortly.', {
           // Not read by the client - it only branches on the code above - but worth
           // having in the response for anyone debugging with the network tab open.
-          details: { reason: decision.reason },
-        },
-      });
+          reason: decision.reason,
+        }, { i18nKey: 'errors.busy', params: {} })
+      );
       return;
     }
     activeJobs++;
@@ -183,8 +182,12 @@ const STATUS_BY_CODE = {
   FFMPEG_FAILED: 500,
   UPLOAD_REJECTED: 413,
   NOT_AUDIO_FILE: 415,
+  BUSY: 503,
 };
 
+// i18nKey/params travel alongside code/message/details in every branch below so the
+// frontend can render a localized sentence (see errorText() in public/shared.js) -
+// message itself is English, developer-facing only (logs, curl, an older client).
 function sendError(res, err) {
   // body-parser rejects a malformed or oversize JSON body with its own error, which
   // would otherwise reach the client as express's HTML error page - the frontend calls
@@ -195,8 +198,10 @@ function sendError(res, err) {
     res.status(tooLarge ? 413 : 400).json({
       error: {
         code: tooLarge ? 'UPLOAD_REJECTED' : 'VALIDATION_ERROR',
-        message: tooLarge ? 'Förfrågan är för stor.' : 'Förfrågans JSON gick inte att tolka.',
+        message: tooLarge ? 'Request is too large.' : "Request's JSON could not be parsed.",
         details: {},
+        i18nKey: tooLarge ? 'errors.requestTooLarge' : 'errors.malformedJson',
+        params: {},
       },
     });
     return;
@@ -204,13 +209,13 @@ function sendError(res, err) {
   if (err instanceof AppError) {
     const status = STATUS_BY_CODE[err.code] || 500;
     res.status(status).json({
-      error: { code: err.code, message: err.message, details: err.details },
+      error: { code: err.code, message: err.message, details: err.details, i18nKey: err.i18nKey, params: err.params },
     });
     return;
   }
   console.error(err);
   res.status(500).json({
-    error: { code: 'INTERNAL_ERROR', message: err.message || 'Okänt serverfel.' },
+    error: { code: 'INTERNAL_ERROR', message: err.message || 'Unknown server error.', i18nKey: 'errors.internal', params: {} },
   });
 }
 
@@ -227,10 +232,20 @@ function withRequestAbort(handler, { deadlineMs = REQUEST_DEADLINE_MS } = {}) {
     // AbortSignal.any(); raise the ceiling so that never logs a warning.
     setMaxListeners(50, controller.signal);
     const deadline = setTimeout(() => {
-      controller.abort(new AppError('REQUEST_TIMEOUT', `Analysen översteg ${Math.round(deadlineMs / 1000)} s och avbröts.`));
+      const seconds = Math.round(deadlineMs / 1000);
+      controller.abort(
+        new AppError('REQUEST_TIMEOUT', `Analysis exceeded ${seconds}s and was aborted.`, {}, {
+          i18nKey: 'errors.requestTimeout',
+          params: { seconds },
+        })
+      );
     }, deadlineMs);
     const onClose = () => {
-      if (!res.writableFinished) controller.abort(new AppError('REQUEST_ABORTED', 'Klienten avbröt anslutningen.'));
+      if (!res.writableFinished) {
+        controller.abort(
+          new AppError('REQUEST_ABORTED', 'Client aborted the connection.', {}, { i18nKey: 'errors.requestAborted', params: {} })
+        );
+      }
     };
     res.once('close', onClose);
     try {
@@ -313,7 +328,10 @@ app.post(
 app.use('/api', (req, res) => {
   // Through sendError like every other error response, rather than a hand-built
   // envelope - same {error:{code,message}} shape, one place that decides it.
-  sendError(res, new AppError('NOT_FOUND', `Okänd API-route: ${req.path}`));
+  sendError(
+    res,
+    new AppError('NOT_FOUND', `Unknown API route: ${req.path}`, {}, { i18nKey: 'errors.notFound', params: { path: req.path } })
+  );
 });
 
 // Anything that reaches express's own error path rather than a route's try/catch -

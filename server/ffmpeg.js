@@ -176,7 +176,7 @@ export async function runFfprobe(url, { signal } = {}) {
   try {
     probeJson = JSON.parse(stdout);
   } catch {
-    throw new FfprobeError(`Kunde inte tolka ffprobes JSON-utdata.\n${stderr}`);
+    throw new FfprobeError(`Could not parse ffprobe's JSON output.\n${stderr}`);
   }
 
   return { raw: probeJson, audio: simplifyProbeResult(probeJson) };
@@ -214,7 +214,7 @@ export async function runFfprobeFile(filePath, { signal } = {}) {
   try {
     probeJson = JSON.parse(stdout);
   } catch {
-    throw new FfprobeError(`Kunde inte tolka ffprobes JSON-utdata.\n${stderr}`);
+    throw new FfprobeError(`Could not parse ffprobe's JSON output.\n${stderr}`);
   }
 
   return { raw: probeJson, audio: simplifyProbeResult(probeJson) };
@@ -396,7 +396,10 @@ export async function measureLoudness(filePath, { signal } = {}) {
   const { code, stderr, timedOut } = await runChildProcess('ffmpeg', args, { timeoutMs: TIMEOUT_MS, signal });
 
   if (timedOut) {
-    throw new FfmpegError(stderr, `Ljudnivåmätningen blev inte klar inom ${TIMEOUT_MS / 1000} sekunder.`);
+    throw new FfmpegError(stderr, `Loudness measurement did not finish within ${TIMEOUT_MS / 1000} seconds.`, {
+      i18nKey: 'errors.requestTimeout',
+      params: { seconds: TIMEOUT_MS / 1000 },
+    });
   }
 
   const summary = parseEbur128Summary(stderr);
@@ -409,7 +412,10 @@ export async function measureLoudness(filePath, { signal } = {}) {
     // Not the exit code: ffmpeg returns its errors negative, which Node surfaces on
     // Windows as numbers like 4294967294 - noise in a sentence a user reads. The
     // actual reason is ffmpeg's own stderr, which FfmpegError carries in details.
-    throw new FfmpegError(stderr, 'ffmpeg kunde inte mäta ljudnivån på det inspelade provet.');
+    throw new FfmpegError(stderr, 'ffmpeg could not measure the loudness of the recorded sample.', {
+      i18nKey: 'errors.loudnessMeasurementFailed',
+      params: {},
+    });
   }
 
   return {
@@ -694,7 +700,11 @@ export async function measureFileLoudness(filePath, { signal, durationSec = null
   });
 
   if (timedOut) {
-    throw new FfmpegError(stderr, `Ljudanalysen blev inte klar inom ${Math.round(FILE_ANALYSIS_TIMEOUT_MS / 1000)} sekunder.`);
+    const seconds = Math.round(FILE_ANALYSIS_TIMEOUT_MS / 1000);
+    throw new FfmpegError(stderr, `Audio analysis did not finish within ${seconds} seconds.`, {
+      i18nKey: 'errors.requestTimeout',
+      params: { seconds },
+    });
   }
 
   const summary = parseEbur128Summary(stderr, { extended: true });
@@ -702,7 +712,10 @@ export async function measureFileLoudness(filePath, { signal, durationSec = null
   const series = parseEbur128Timeline(stderr);
 
   if (!summary.available && !astats) {
-    throw new FfmpegError(stderr, 'ffmpeg kunde inte mäta ljudet i filen.');
+    throw new FfmpegError(stderr, 'ffmpeg could not measure the audio in the file.', {
+      i18nKey: 'errors.fileAudioMeasurementFailed',
+      params: {},
+    });
   }
 
   const phase = gatePhasingBySilence(parsePhasing(stderr), parseSilenceDetect(stderr));
@@ -789,7 +802,12 @@ export async function analyzeSpectrum(filePath, { signal } = {}) {
       maxOutputBytes: FILE_ANALYSIS_MAX_STDERR_BYTES,
     });
 
-    if (timedOut) throw new FfmpegError(stderr, 'Spektrogrammet blev inte klart i tid.');
+    if (timedOut) {
+      throw new FfmpegError(stderr, 'The spectrogram did not finish in time.', {
+        i18nKey: 'errors.spectrogramTimeout',
+        params: {},
+      });
+    }
 
     let dataUri = null;
     try {
@@ -798,7 +816,12 @@ export async function analyzeSpectrum(filePath, { signal } = {}) {
     } catch {
       /* no image - fall through, code check below decides if that's fatal */
     }
-    if (!dataUri && code !== 0) throw new FfmpegError(stderr, 'ffmpeg kunde inte rendera ett spektrogram.');
+    if (!dataUri && code !== 0) {
+      throw new FfmpegError(stderr, 'ffmpeg could not render a spectrogram.', {
+        i18nKey: 'errors.spectrogramFailed',
+        params: {},
+      });
+    }
 
     // ffmpeg prints the filter summaries in reverse of declaration order, so the
     // stderr blocks appear [side, mid, full]; reverse back to declaration order.
@@ -904,7 +927,9 @@ export async function sampleStream(url, requestedSeconds = 8, { signal } = {}) {
     } catch {
       warnings.push({
         step: 'probe',
-        message: `ffprobe svarade inte med tolkbar JSON (slutkod ${probeRes.code}). ${(probeRes.stderr || '').slice(0, 300)}`.trim(),
+        message: `ffprobe did not return parsable JSON (exit code ${probeRes.code}). ${(probeRes.stderr || '').slice(0, 300)}`.trim(),
+        i18nKey: 'errors.warnings.unparsableProbeJson',
+        params: { code: probeRes.code, stderr: (probeRes.stderr || '').slice(0, 300).trim() },
       });
     }
 
@@ -914,7 +939,9 @@ export async function sampleStream(url, requestedSeconds = 8, { signal } = {}) {
     } catch {
       warnings.push({
         step: 'frames',
-        message: `Metadataramarna kunde inte läsas (slutkod ${framesRes.code}). ${(framesRes.stderr || '').slice(0, 300)}`.trim(),
+        message: `Metadata frames could not be read (exit code ${framesRes.code}). ${(framesRes.stderr || '').slice(0, 300)}`.trim(),
+        i18nKey: 'errors.warnings.unparsableFramesJson',
+        params: { code: framesRes.code, stderr: (framesRes.stderr || '').slice(0, 300).trim() },
       });
     }
 
@@ -937,6 +964,8 @@ export async function sampleStream(url, requestedSeconds = 8, { signal } = {}) {
         message: loudnessOutcome.err.message,
         code: loudnessOutcome.err.code || 'UNKNOWN',
         details: loudnessOutcome.err.details,
+        i18nKey: loudnessOutcome.err.i18nKey,
+        params: loudnessOutcome.err.params,
       };
     }
 

@@ -93,9 +93,11 @@ export function saveRequestBodyToFile(req, filePath, maxBytes = MAX_UPLOAD_BYTES
       idleTimer = setTimeout(
         () =>
           fail(
-            new UploadRejectedError(`Uppladdningen stannade av i mer än ${Math.round(idleMs / 1000)} sekunder.`, {
-              idleMs,
-            }),
+            new UploadRejectedError(
+              `Upload stalled for more than ${Math.round(idleMs / 1000)} seconds.`,
+              { idleMs },
+              { i18nKey: 'errors.upload.stalled', params: { seconds: Math.round(idleMs / 1000) } }
+            ),
             { destroyRequest: true }
           ),
         idleMs
@@ -108,10 +110,12 @@ export function saveRequestBodyToFile(req, filePath, maxBytes = MAX_UPLOAD_BYTES
       written += chunk.length;
       armIdleTimer();
       if (written > maxBytes) {
+        const limitMb = Math.round(maxBytes / 1024 / 1024);
         fail(
           new UploadRejectedError(
-            `Filen är större än ${Math.round(maxBytes / 1024 / 1024)} MB och analyseras inte.`,
-            { limitBytes: maxBytes }
+            `File is larger than ${limitMb} MB and will not be analyzed.`,
+            { limitBytes: maxBytes },
+            { i18nKey: 'errors.upload.tooLarge', params: { limitMb } }
           )
         );
       }
@@ -120,7 +124,13 @@ export function saveRequestBodyToFile(req, filePath, maxBytes = MAX_UPLOAD_BYTES
     out.on('error', fail);
     out.on('finish', () => {
       if (written === 0) {
-        finish(reject, new UploadRejectedError('Ingen fil togs emot. Skicka filens innehåll som förfråganskropp.'));
+        finish(
+          reject,
+          new UploadRejectedError('No file was received. Send the file contents as the request body.', {}, {
+            i18nKey: 'errors.upload.empty',
+            params: {},
+          })
+        );
         return;
       }
       finish(resolve, written);
@@ -228,6 +238,8 @@ const toErr = (err) => ({
   message: err.message,
   code: err.code || 'UNKNOWN',
   details: err.details,
+  i18nKey: err.i18nKey,
+  params: err.params,
 });
 
 /**
@@ -242,13 +254,19 @@ export async function analyzeAudioFile(filePath, originalName, { signal } = {}) 
   } catch (err) {
     if (signal?.aborted) throw err;
     if (err instanceof FfprobeError) {
-      throw new NotAudioFileError('Filen kunde inte läsas som ljud eller media. Är det verkligen en ljudfil?');
+      throw new NotAudioFileError("File could not be read as audio or media. Is it really an audio file?", {
+        i18nKey: 'errors.notAudioFile.unreadable',
+        params: {},
+      });
     }
     throw err;
   }
 
   if (!(probe.raw.streams || []).some((s) => s.codec_type === 'audio')) {
-    throw new NotAudioFileError('Filen innehåller inget ljudspår.');
+    throw new NotAudioFileError('File contains no audio track.', {
+      i18nKey: 'errors.notAudioFile.noTrack',
+      params: {},
+    });
   }
 
   const format = buildFileFormat(probe.raw);

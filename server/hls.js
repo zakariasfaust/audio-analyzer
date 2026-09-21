@@ -44,16 +44,25 @@ export async function resolveMediaPlaylist(url, { signal } = {}) {
   // type === 'master'
   const { variants } = manifest.parsed;
   if (!variants.length) {
-    throw new InvalidManifestError(url, 'Master-playlist utan några #EXT-X-STREAM-INF-varianter.');
+    throw new InvalidManifestError(url, null, {
+      message: 'Master playlist has no #EXT-X-STREAM-INF variants.',
+      i18nKey: 'errors.hlsNoVariants',
+    });
   }
   const chosenVariant = variants[0];
   if (!chosenVariant.url) {
-    throw new InvalidManifestError(url, 'Kunde inte hitta någon variant-URL i master-playlistan.');
+    throw new InvalidManifestError(url, null, {
+      message: 'Could not find a variant URL in the master playlist.',
+      i18nKey: 'errors.hlsNoVariantUrl',
+    });
   }
 
   const media = await getManifest(chosenVariant.url, { signal });
   if (media.parsed.type !== 'media') {
-    throw new InvalidManifestError(chosenVariant.url, 'Variant-URL:en pekade inte på en media-playlist.');
+    throw new InvalidManifestError(chosenVariant.url, null, {
+      message: "The variant URL didn't point to a media playlist.",
+      i18nKey: 'errors.hlsVariantNotMedia',
+    });
   }
 
   return { master: manifest, media, chosenVariant };

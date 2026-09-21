@@ -30,16 +30,21 @@ test('validateUrl accepts http(s) and rejects everything else', () => {
   assert.equal(validateUrl('https://example.com/a.m3u8'), 'https://example.com/a.m3u8');
   assert.equal(validateUrl('http://example.com:8000/stream'), 'http://example.com:8000/stream');
 
+  const unsupportedProtocol = (err) => err.code === 'VALIDATION_ERROR' && err.i18nKey === 'errors.validation.unsupportedProtocol';
   for (const bad of ['file:///etc/passwd', 'ftp://example.com/x', 'javascript:alert(1)', 'data:text/plain,x']) {
-    assert.throws(() => validateUrl(bad), /Endast http- och https/, `should reject ${bad}`);
+    assert.throws(() => validateUrl(bad), unsupportedProtocol, `should reject ${bad}`);
   }
 });
 
 test('validateUrl rejects a missing or unparseable url', () => {
-  assert.throws(() => validateUrl(undefined), /saknas/);
-  assert.throws(() => validateUrl(''), /saknas/);
-  assert.throws(() => validateUrl(123), /saknas/);
-  assert.throws(() => validateUrl('not a url'), /inte en giltig URL/);
+  const missingUrl = (err) => err.code === 'VALIDATION_ERROR' && err.i18nKey === 'errors.validation.missingUrl';
+  assert.throws(() => validateUrl(undefined), missingUrl);
+  assert.throws(() => validateUrl(''), missingUrl);
+  assert.throws(() => validateUrl(123), missingUrl);
+  assert.throws(
+    () => validateUrl('not a url'),
+    (err) => err.code === 'VALIDATION_ERROR' && err.i18nKey === 'errors.validation.invalidUrl'
+  );
 });
 
 test('validateUrl strips credentials so they are never forwarded or echoed back', () => {

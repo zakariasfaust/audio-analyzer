@@ -21,27 +21,19 @@ let lastFileData = null;
 function renderFileControls() {
   return `
     <div id="analysis-controls">
-      <button type="button" id="file-copy-btn" title="Kopiera all filanalys som text" disabled>Kopiera analys</button>
+      <button type="button" id="file-copy-btn" title="${esc(t('file.controls.copyBtnTitle'))}" disabled>${esc(
+        t('controls.copyBtn')
+      )}</button>
     </div>`;
 }
 
+// ID3/Vorbis keys are lowercase machine names; give the common ones a label from the
+// catalog (file.tagLabels.*), t()'s own "return the raw key" fallback doubling as the
+// unknown-key passthrough the old `map[key] || key` did.
 function tagLabel(key) {
-  // ID3/Vorbis keys are lowercase machine names; give the common ones a Swedish label.
-  const map = {
-    title: 'Titel',
-    artist: 'Artist',
-    album: 'Album',
-    album_artist: 'Albumartist',
-    date: 'År',
-    track: 'Spår',
-    genre: 'Genre',
-    composer: 'Kompositör',
-    comment: 'Kommentar',
-    publisher: 'Utgivare',
-    copyright: 'Copyright',
-    language: 'Språk',
-  };
-  return map[key] || key;
+  const translationKey = `file.tagLabels.${key}`;
+  const translated = t(translationKey);
+  return translated !== translationKey ? translated : key;
 }
 
 function renderFileOverview(data) {
@@ -51,14 +43,18 @@ function renderFileOverview(data) {
     .map(([k, v]) => `<tr><td>${esc(tagLabel(k))}</td><td>${esc(v)}</td></tr>`)
     .join('');
   const tagBlock = tagRows
-    ? `<table><thead><tr><th>Tagg</th><th>Värde</th></tr></thead><tbody>${tagRows}</tbody></table>`
-    : '<p class="note">Inga taggar (artist/titel/album …) i filen.</p>';
+    ? `<table><thead><tr><th>${esc(t('file.overview.tagHeader'))}</th><th>${esc(
+        t('file.overview.valueHeader')
+      )}</th></tr></thead><tbody>${tagRows}</tbody></table>`
+    : `<p class="note">${esc(t('file.overview.noTags'))}</p>`;
 
   const replayRows = Object.entries(f.replayGain || {})
     .map(([k, v]) => `<tr><td>${esc(k.replace(/_/g, ' '))}</td><td>${esc(v)}</td></tr>`)
     .join('');
   const replayBlock = replayRows
-    ? `<p class="note">${withHint('span', 'ReplayGain-taggar', 'replaygain')} (satta av ett tidigare verktyg, inte av oss):</p>
+    ? `<p class="note">${withHint('span', t('file.overview.replayGainLabel'), 'replaygain')}${esc(
+        t('file.overview.replayGainNote')
+      )}</p>
        <table><tbody>${replayRows}</tbody></table>`
     : '';
 
@@ -69,16 +65,18 @@ function renderFileOverview(data) {
     )
     .join('');
   const chapterBlock = chapterRows
-    ? `<p class="note">${withHint('span', 'Kapitel', 'kapitel')}:</p>
-       <table><thead><tr><th>Från</th><th>Till</th><th>Titel</th></tr></thead><tbody>${chapterRows}</tbody></table>`
+    ? `<p class="note">${withHint('span', t('file.overview.chaptersLabel'), 'kapitel')}:</p>
+       <table><thead><tr><th>${esc(t('file.overview.chapterFromHeader'))}</th><th>${esc(
+        t('file.overview.chapterToHeader')
+      )}</th><th>${esc(t('file.overview.chapterTitleHeader'))}</th></tr></thead><tbody>${chapterRows}</tbody></table>`
     : '';
 
   return `
     <section id="sec-file-overview">
-      ${withHint('h2', 'Filen', 'fil-oversikt')}
+      ${withHint('h2', t('file.overview.heading'), 'fil-oversikt')}
       ${renderDl(fileOverviewFields(data))}
       ${replayBlock}
-      <div class="subsection"><h3>Taggar</h3>${tagBlock}</div>
+      <div class="subsection"><h3>${esc(t('file.overview.tagsHeading'))}</h3>${tagBlock}</div>
       ${chapterBlock}
     </section>`;
 }
@@ -95,25 +93,33 @@ function fileOverviewFields(data) {
   const tagged = f.taggedDurationSec;
   const tlenMismatch =
     tagged != null && f.durationSec != null && fmtDuration(tagged) !== fmtDuration(f.durationSec);
-  const mismatchNote = `skiljer sig från filens uppmätta längd (${fmtDuration(f.durationSec)})`;
+  const mismatchNote = t('file.overview.tlenMismatch', { duration: fmtDuration(f.durationSec) });
 
   return [
-    field('Filnamn', null, data.originalName || '–'),
-    field('Container', 'fil-container', f.container ? f.container + (f.containerLongName ? ` (${f.containerLongName})` : '') : '–'),
-    field('Längd', 'fil-langd', fmtDuration(f.durationSec)),
+    field(t('file.overview.filenameLabel'), null, data.originalName || '–'),
+    field(
+      t('file.overview.containerLabel'),
+      'fil-container',
+      f.container ? f.container + (f.containerLongName ? ` (${f.containerLongName})` : '') : '–'
+    ),
+    field(t('file.overview.lengthLabel'), 'fil-langd', fmtDuration(f.durationSec)),
     tagged != null &&
       field(
-        'Längd enligt tagg (TLEN)',
+        t('file.overview.taggedLengthLabel'),
         'tlen',
         fmtDuration(tagged) + (tlenMismatch ? ` – ${mismatchNote}` : ''),
         fmtDuration(tagged) + (tlenMismatch ? ` <span class="tag-mismatch">${esc(mismatchNote)}</span>` : '')
       ),
-    field('Filstorlek', null, f.fileSizeBytes ? fmtInt(f.fileSizeBytes) + ' byte' : '–'),
-    field('Bitrate (snitt)', 'audio-bitrate', f.overallBitrateKbps ? fmtNumber(f.overallBitrateKbps) + ' kbit/s' : '–'),
-    field('Sampleformat', 'sampleformat', x.sampleFmt || '–'),
-    field('Bitdjup', 'bitdjup', bitDepthText(x, a)),
-    field('Encoder', 'encoder', f.encoder || '–'),
-    field('Omslagsbild', 'omslagsbild', coverArtText(f.coverArt)),
+    field(t('file.overview.fileSizeLabel'), null, f.fileSizeBytes ? fmtInt(f.fileSizeBytes) + ' byte' : '–'),
+    field(
+      t('file.overview.bitrateLabel'),
+      'audio-bitrate',
+      f.overallBitrateKbps ? fmtNumber(f.overallBitrateKbps) + ' kbit/s' : '–'
+    ),
+    field(t('file.overview.sampleFormatLabel'), 'sampleformat', x.sampleFmt || '–'),
+    field(t('file.overview.bitDepthLabel'), 'bitdjup', bitDepthText(x, a)),
+    field(t('file.overview.encoderLabel'), 'encoder', f.encoder || '–'),
+    field(t('file.overview.coverArtLabel'), 'omslagsbild', coverArtText(f.coverArt)),
   ];
 }
 
@@ -131,28 +137,29 @@ const INTEGER_SAMPLE_FMT = /^(?:u8|s16|s32|s64)p?$/;
 function bitDepthText(audioExtra, astats) {
   const fmt = audioExtra.sampleFmt;
   if (!fmt) return '–';
-  if (!INTEGER_SAMPLE_FMT.test(fmt)) return `gäller inte (${fmt} – flyttal)`;
+  if (!INTEGER_SAMPLE_FMT.test(fmt)) return t('file.overview.bitDepthNotApplicable', { fmt });
 
   const declared = astats?.bitDepthContainer ?? audioExtra.bitsPerRawSample ?? audioExtra.bitsPerSample ?? null;
   if (declared === null) return '–';
   const used = astats?.bitDepthUsed;
   return used == null || used === declared
-    ? `${fmtInt(declared)} bitar`
-    : `${fmtInt(declared)} bitar deklarerat, ${fmtInt(used)} faktiskt använda`;
+    ? t('file.overview.bitDepthValue', { declared: fmtInt(declared) })
+    : t('file.overview.bitDepthMismatch', { declared: fmtInt(declared), used: fmtInt(used) });
 }
 
 function coverArtText(cover) {
-  if (!cover) return 'nej';
-  const size = cover.width && cover.height ? `${cover.width}×${cover.height} px` : 'ja';
-  return `${size} (${cover.codec || 'okänt format'})`;
+  if (!cover) return t('file.overview.coverArtNone');
+  const size = cover.width && cover.height ? `${cover.width}×${cover.height} px` : t('file.overview.coverArtPresent');
+  return `${size} (${cover.codec || t('file.overview.unknownFormat')})`;
 }
 
 // The ceiling comes from analyzedSeconds rather than a literal, so the sentence follows
 // FILE_ANALYSIS_MAX_SECONDS if it is ever retuned on the server.
 function truncationNote(l) {
-  return `Filen är längre än ${fmtInt(l.analyzedSeconds / 60)} minuter – analysen nedan gäller de första ${fmtDuration(
-    l.analyzedSeconds
-  )}.`;
+  return t('file.overview.truncationNote', {
+    minutes: fmtInt(l.analyzedSeconds / 60),
+    duration: fmtDuration(l.analyzedSeconds),
+  });
 }
 
 // The silence-gated mono / out-of-phase stretches (see gatePhasingBySilence on the
@@ -160,21 +167,23 @@ function truncationNote(l) {
 function renderFilePhase(stereo) {
   if (!stereo) return '';
   const spans = [
-    ...(stereo.outOfPhaseSpans || []).map((s) => ({ ...s, kind: 'Ur fas (motverkar sig i mono)' })),
-    ...(stereo.dualMono ? [] : (stereo.monoSpans || []).map((s) => ({ ...s, kind: 'Mono (kanalerna identiska)' }))),
+    ...(stereo.outOfPhaseSpans || []).map((s) => ({ ...s, kind: t('file.phase.outOfPhaseKind') })),
+    ...(stereo.dualMono ? [] : (stereo.monoSpans || []).map((s) => ({ ...s, kind: t('file.phase.monoKind') }))),
   ].sort((a, b) => a.startSec - b.startSec);
   if (!spans.length) return '';
   const rows = spans
     .map(
       (s) =>
         `<tr><td>${esc(s.kind)}</td><td>${fmtDuration(s.startSec, 0)}</td><td>${
-          s.endSec === null ? 'till slutet' : fmtDuration(s.endSec, 0)
+          s.endSec === null ? esc(t('file.phase.toEnd')) : fmtDuration(s.endSec, 0)
         }</td><td>${s.durationSec === null ? '–' : fmtDuration(s.durationSec, 0)}</td></tr>`
     )
     .join('');
   return `
-    <p class="note">${withHint('span', 'Fas- och monopartier', 'fas')} (tystnad borträknad):</p>
-    <table><thead><tr><th>Typ</th><th>Från</th><th>Till</th><th>Längd</th></tr></thead><tbody>${rows}</tbody></table>`;
+    <p class="note">${withHint('span', t('file.phase.heading'), 'fas')}${esc(t('file.phase.silenceExcludedNote'))}</p>
+    <table><thead><tr><th>${esc(t('file.phase.typeHeader'))}</th><th>${esc(t('file.phase.fromHeader'))}</th><th>${esc(
+    t('file.phase.toHeader')
+  )}</th><th>${esc(t('file.phase.durationHeader'))}</th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 
 function fmtCorrelation(r) {
@@ -188,26 +197,26 @@ function fmtCorrelation(r) {
 function stereoVerdict(stereo) {
   const r = stereo && stereo.correlation;
   if (typeof r !== 'number') return null;
-  if (stereo.dualMono || r >= 0.999) return 'identiska kanaler (dubbelmono – ingen stereobild)';
-  if (r >= 0.9) return 'mycket smal stereobild, nästan mono';
-  if (r >= 0.5) return 'normal stereobild, mono-kompatibel';
-  if (r >= 0.1) return 'bred stereobild';
-  if (r >= -0.1) return 'mycket bred / dekorrelerad – kontrollera i mono';
-  return 'kanalerna motverkar varandra – energi går förlorad vid mono-summering';
+  if (stereo.dualMono || r >= 0.999) return t('file.stereoVerdict.dualMono');
+  if (r >= 0.9) return t('file.stereoVerdict.verySmall');
+  if (r >= 0.5) return t('file.stereoVerdict.normal');
+  if (r >= 0.1) return t('file.stereoVerdict.wide');
+  if (r >= -0.1) return t('file.stereoVerdict.veryWide');
+  return t('file.stereoVerdict.canceling');
 }
 
 // The correlation reading, as a field: the plain text carries the verdict as a dash
 // clause, the HTML adds the warning colour when the channels actually cancel.
 function stereoField(stereo) {
-  const make = (text, html) => field('Stereokorrelation', 'stereokorrelation', text, html);
-  if (!stereo) return make('– (kunde inte mätas)');
+  const make = (text, html) => field(t('file.stereo.label'), 'stereokorrelation', text, html);
+  if (!stereo) return make(t('file.stereo.notMeasured'));
   if (stereo.correlation === null || stereo.correlation === undefined) {
-    return make('– (för lite ljud för att mäta)');
+    return make(t('file.stereo.tooQuiet'));
   }
 
   const value = fmtCorrelation(stereo.correlation);
   const verdict = stereoVerdict(stereo);
-  const windowNote = stereo.windowTruncated ? ` (uppmätt över de första ${fmtDuration(stereo.windowSec, 0)})` : '';
+  const windowNote = stereo.windowTruncated ? t('file.stereo.windowNote', { duration: fmtDuration(stereo.windowSec, 0) }) : '';
 
   const text = value + (verdict ? ` – ${verdict}` : '') + windowNote;
   const verdictHtml = !verdict
@@ -227,39 +236,41 @@ function loudnessFields(data) {
   const or = (v, fmt) => (v === null || v === undefined ? '–' : fmt(v));
 
   return [
-    field('Integrerad nivå', 'integrated-lufs', or(l.integratedLufs, (v) => fmtNumber(v) + ' LUFS')),
+    field(t('file.loudness.integratedLabel'), 'integrated-lufs', or(l.integratedLufs, (v) => fmtNumber(v) + ' LUFS')),
     field(
-      'Loudness range (LRA)',
+      t('file.loudness.lraLabel'),
       'lra',
       or(
         l.lra,
         (v) =>
           fmtNumber(v) +
           ' LU' +
-          (l.lraLow !== null && l.lraHigh !== null ? ` (${fmtNumber(l.lraLow)} … ${fmtNumber(l.lraHigh)} LUFS)` : '')
+          (l.lraLow !== null && l.lraHigh !== null
+            ? t('file.loudness.lraRangeSuffix', { low: fmtNumber(l.lraLow), high: fmtNumber(l.lraHigh) })
+            : '')
       )
     ),
     field(
-      'True peak',
+      t('file.loudness.truePeakLabel'),
       'true-peak',
-      l.truePeakIsSilent ? '−∞ dBTP (helt digitalt tyst)' : or(l.truePeakDbfs, (v) => fmtNumber(v) + ' dBTP')
+      l.truePeakIsSilent ? t('file.loudness.truePeakSilentValue') : or(l.truePeakDbfs, (v) => fmtNumber(v) + ' dBTP')
     ),
     field(
-      'Sample peak',
+      t('file.loudness.samplePeakLabel'),
       'sample-peak',
       l.samplePeakDbfs === null || l.samplePeakDbfs === undefined
         ? l.truePeakIsSilent
-          ? '−∞ dBFS'
+          ? t('file.loudness.samplePeakSilentValue')
           : '–'
         : fmtNumber(l.samplePeakDbfs) + ' dBFS'
     ),
-    field('PLR (peak − nivå)', 'plr', or(l.plr, (v) => fmtNumber(v) + ' LU')),
-    field('Crest factor', 'crest-factor', or(a.crestFactor, (v) => fmtNumber(v, 2))),
-    field('DC-offset', 'dc-offset', or(a.dcOffset, (v) => fmtNumber(v, 4))),
-    field('RMS-nivå', 'rms-niva', or(a.rmsLevelDb, (v) => fmtNumber(v) + ' dB')),
-    field('Brusgolv', 'brusgolv', or(a.noiseFloorDb, (v) => fmtNumber(v) + ' dB')),
+    field(t('file.loudness.plrLabel'), 'plr', or(l.plr, (v) => fmtNumber(v) + ' LU')),
+    field(t('file.loudness.crestFactorLabel'), 'crest-factor', or(a.crestFactor, (v) => fmtNumber(v, 2))),
+    field(t('file.loudness.dcOffsetLabel'), 'dc-offset', or(a.dcOffset, (v) => fmtNumber(v, 4))),
+    field(t('file.loudness.rmsLabel'), 'rms-niva', or(a.rmsLevelDb, (v) => fmtNumber(v) + ' dB')),
+    field(t('file.loudness.noiseFloorLabel'), 'brusgolv', or(a.noiseFloorDb, (v) => fmtNumber(v) + ' dB')),
     field(
-      'Samplingar i digitalt max',
+      t('file.loudness.clippingCountLabel'),
       'klippning',
       or(a.absPeakCount, (v) => fmtInt(v))
     ),
@@ -268,11 +279,11 @@ function loudnessFields(data) {
 }
 
 function renderFileLoudness(data) {
-  const head = withHint('h2', 'Ljudnivå och dynamik', 'loudness');
+  const head = withHint('h2', t('file.loudness.heading'), 'loudness');
   const err = data.errors?.loudness;
-  if (err) return `<section id="sec-file-loudness">${head}<p class="error">${esc(err.message)}</p></section>`;
+  if (err) return `<section id="sec-file-loudness">${head}<p class="error">${esc(errorText(err))}</p></section>`;
   const l = data.loudness;
-  if (!l) return `<section id="sec-file-loudness">${head}<p class="note">Kunde inte mätas.</p></section>`;
+  if (!l) return `<section id="sec-file-loudness">${head}<p class="note">${esc(t('file.loudness.couldNotMeasure'))}</p></section>`;
 
   const isStereo = (data.audio?.channels || 0) >= 2;
   const truncNote = l.truncated
@@ -286,7 +297,7 @@ function renderFileLoudness(data) {
       ${renderDl(loudnessFields(data))}
       ${isStereo ? renderFilePhase(l.stereo) : ''}
       <div class="subsection">
-        <h3>Ljudnivå</h3>
+        <h3>${esc(t('file.loudness.chartHeading'))}</h3>
         <canvas class="analysis-chart" id="file-loudness-chart" height="220"></canvas>
         <p class="note" id="file-chart-legend"></p>
       </div>
@@ -294,9 +305,9 @@ function renderFileLoudness(data) {
 }
 
 function renderFileSpectrogram(data) {
-  const head = withHint('h2', 'Spektrogram', 'spektrogram');
+  const head = withHint('h2', t('file.spectrogram.heading'), 'spektrogram');
   const err = data.errors?.spectrogram;
-  if (err) return `<section id="sec-file-spectrogram">${head}<p class="error">${esc(err.message)}</p></section>`;
+  if (err) return `<section id="sec-file-spectrogram">${head}<p class="error">${esc(errorText(err))}</p></section>`;
   const s = data.spectrogram;
   if (!s) return '';
 
@@ -311,14 +322,18 @@ function renderFileSpectrogram(data) {
   // notes about the same window can never disagree about whether it was truncated.
   const windowNote =
     s.windowSeconds && data.format?.durationSec != null && data.format.durationSec > s.windowSeconds
-      ? `<p class="note">Visar de första ${fmtDuration(s.windowSeconds, 0)}.</p>`
+      ? `<p class="note">${esc(t('file.spectrogram.windowNote', { duration: fmtDuration(s.windowSeconds, 0) }))}</p>`
       : '';
 
   return `
     <section id="sec-file-spectrogram">
       ${head}
       ${windowNote}
-      ${safeImg ? `<img class="spectrogram" src="${safeImg}" alt="Spektrogram av filen" />` : '<p class="note">Ingen bild kunde skapas.</p>'}
+      ${
+        safeImg
+          ? `<img class="spectrogram" src="${safeImg}" alt="${esc(t('file.spectrogram.imgAlt'))}" />`
+          : `<p class="note">${esc(t('file.spectrogram.noImage'))}</p>`
+      }
     </section>`;
 }
 
@@ -437,9 +452,11 @@ function drawFileLoudnessChart(series, integratedLufs) {
   const legend = document.getElementById('file-chart-legend');
   if (legend) {
     legend.innerHTML =
-      '<span class="swatch swatch-lufs"></span> Short-term ljudnivå (LUFS)' +
-      ' <span class="swatch swatch-truepeak"></span> True peak (dBTP)' +
-      (typeof integratedLufs === 'number' ? ' <span class="swatch swatch-integrated"></span> Integrerad nivå' : '');
+      `<span class="swatch swatch-lufs"></span> ${esc(t('file.chart.legendShortTerm'))}` +
+      ` <span class="swatch swatch-truepeak"></span> ${esc(t('file.chart.legendTruePeak'))}` +
+      (typeof integratedLufs === 'number'
+        ? ` <span class="swatch swatch-integrated"></span> ${esc(t('file.chart.legendIntegrated'))}`
+        : '');
   }
 }
 
@@ -453,33 +470,36 @@ function buildFileCopyText(data) {
   const f = data.format || {};
   const l = data.loudness;
 
-  add(`Filanalys: ${data.originalName || '(namnlös)'}`);
-  add(`Genererad: ${fmtDateTime(new Date().toISOString())}`);
+  add(t('file.copyText.title', { name: data.originalName || t('file.copyText.unnamedFile') }));
+  add(t('flow.generated', { timestamp: fmtDateTime(new Date().toISOString()) }));
   add('');
   // The same field lists the page renders, so the two can no longer disagree about
   // which rows exist - the copy text used to quietly omit sample format, bit depth
-  // and cover art, and to print LRA without its low/high range.
-  add('FIL');
+  // and cover art, and to print LRA without its low/high range. The section heading
+  // shares the card's own key (via .toUpperCase()), same pattern app.js uses, instead
+  // of a second literal that could drift from it.
+  add(t('file.overview.heading').toUpperCase());
   copyFields(add, fileOverviewFields(data));
   add('');
   addAudio(add, data.audio);
   if (Object.keys(f.tags || {}).length) {
-    add('TAGGAR');
+    add(t('file.overview.tagsHeading').toUpperCase());
     Object.entries(f.tags).forEach(([k, v]) => add(`  ${tagLabel(k)}: ${v}`));
     add('');
   }
   if (l) {
-    add('LJUDNIVÅ OCH DYNAMIK');
+    add(t('file.loudness.heading').toUpperCase());
     if (l.truncated) add(`(${truncationNote(l)})`);
     copyFields(add, loudnessFields(data));
     const s = (data.audio?.channels || 0) >= 2 ? l.stereo : null;
     if (s) {
+      const toEnd = (endSec) => (endSec == null ? t('file.phase.copyToEnd') : fmtDuration(endSec, 0));
       const spans = [
-        ...(s.outOfPhaseSpans || []).map((x) => `  Ur fas ${fmtDuration(x.startSec, 0)}–${x.endSec == null ? 'slutet' : fmtDuration(x.endSec, 0)}`),
-        ...(s.dualMono ? [] : (s.monoSpans || []).map((x) => `  Mono ${fmtDuration(x.startSec, 0)}–${x.endSec == null ? 'slutet' : fmtDuration(x.endSec, 0)}`)),
+        ...(s.outOfPhaseSpans || []).map((x) => `  ${t('file.phase.outOfPhaseShort')} ${fmtDuration(x.startSec, 0)}–${toEnd(x.endSec)}`),
+        ...(s.dualMono ? [] : (s.monoSpans || []).map((x) => `  ${t('file.phase.monoShort')} ${fmtDuration(x.startSec, 0)}–${toEnd(x.endSec)}`)),
       ];
       if (spans.length) {
-        add('Fas- och monopartier (tystnad borträknad):');
+        add(t('file.phase.heading') + t('file.phase.silenceExcludedNote'));
         spans.forEach(add);
       }
     }
@@ -487,8 +507,8 @@ function buildFileCopyText(data) {
   }
   const errKeys = Object.keys(data.errors || {});
   if (errKeys.length) {
-    add('DELVIS RESULTAT');
-    errKeys.forEach((k) => add(`  ${k}: ${data.errors[k].message}`));
+    add(t('file.copyText.partialResultsHeading'));
+    errKeys.forEach((k) => add(`  ${k}: ${errorText(data.errors[k])}`));
   }
   return lines.join('\n');
 }
@@ -522,12 +542,12 @@ async function analyzeFile(file) {
   // then claim the area so anything still in flight (including a log that has not
   // polled yet) stops writing into it. See claimResults() in shared.js.
   if (typeof stopStreamLog === 'function') stopStreamLog();
-  const myToken = claimResults();
+  const myToken = claimResults('file');
 
   lastFileData = null;
   filePick?.classList.add('busy');
   resultsEl.innerHTML = '';
-  statusEl.textContent = `Analyserar ${file.name} …`;
+  statusEl.textContent = t('file.flow.analyzing', { name: file.name });
 
   try {
     const res = await fetch('/api/analyze-file?name=' + encodeURIComponent(file.name), {
@@ -538,14 +558,14 @@ async function analyzeFile(file) {
     const body = await res.json();
     if (!ownsResults(myToken)) return;
     if (!res.ok) {
-      resultsEl.innerHTML = renderFatalError(body.error || { message: 'Analysen misslyckades.', details: {} });
+      resultsEl.innerHTML = renderFatalError(body.error || { message: t('file.flow.analysisFailed'), details: {} });
       return;
     }
     lastFileData = body;
     renderFileResult(body);
   } catch (err) {
     if (!ownsResults(myToken)) return;
-    resultsEl.innerHTML = renderFatalError({ message: 'Kunde inte nå servern: ' + err.message, details: {} });
+    resultsEl.innerHTML = renderFatalError({ message: t('error.serverUnreachable', { message: err.message }), details: {} });
   } finally {
     // The pick button belongs to the header, not to #results, so it is un-dimmed even
     // when another view has taken over - otherwise it would stay greyed out for good.
@@ -572,11 +592,22 @@ document.getElementById('results')?.addEventListener('click', async (event) => {
   const original = btn.textContent;
   try {
     await navigator.clipboard.writeText(buildFileCopyText(lastFileData));
-    btn.textContent = 'Kopierat!';
+    btn.textContent = t('controls.copied');
   } catch {
-    btn.textContent = 'Kunde inte kopiera';
+    btn.textContent = t('controls.copyFailed');
   }
   setTimeout(() => {
     btn.textContent = original;
   }, 1500);
+});
+
+// A language switch re-renders this view in place from the cached last result instead
+// of reloading the page - see setLocale()/onLocaleChange() in i18n.js and
+// claimResults(owner)/currentResultsOwner() in shared.js. Simplest of the three views'
+// hooks: no in-progress timer/session state to protect, just a re-render from
+// lastFileData. No-op if this view doesn't currently own #results, or nothing has been
+// analyzed yet.
+onLocaleChange(() => {
+  if (currentResultsOwner() !== 'file' || !lastFileData) return;
+  renderFileResult(lastFileData);
 });

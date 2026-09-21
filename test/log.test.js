@@ -26,15 +26,18 @@ function loadLog() {
   const context = vm.createContext({
     document: { getElementById: () => null },
     window: { addEventListener() {} },
+    navigator: { language: 'sv', languages: ['sv'] },
+    localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
     URL,
     URLSearchParams,
     setTimeout,
     console,
   });
 
-  for (const file of ['terms.js', 'shared.js', 'log.js']) {
+  for (const file of ['i18n.js', 'i18n/sv.js', 'i18n/en.js', 'shared.js', 'log.js']) {
     vm.runInContext(fs.readFileSync(path.join(publicDir, file), 'utf8'), context, { filename: file });
   }
+  context.setLocale('sv');
   return context;
 }
 

@@ -31,16 +31,22 @@ const dnsLookupAsync = promisify(dnsLookup);
 
 export function validateUrl(raw) {
   if (!raw || typeof raw !== 'string') {
-    throw new ValidationError('Parametern "url" saknas.');
+    throw new ValidationError('Parameter "url" is missing.', { i18nKey: 'errors.validation.missingUrl', params: {} });
   }
   let parsed;
   try {
     parsed = new URL(raw);
   } catch {
-    throw new ValidationError(`"${raw}" är inte en giltig URL.`);
+    throw new ValidationError(`"${raw}" is not a valid URL.`, {
+      i18nKey: 'errors.validation.invalidUrl',
+      params: { value: raw },
+    });
   }
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-    throw new ValidationError('Endast http- och https-URL:er stöds.');
+    throw new ValidationError('Only http and https URLs are supported.', {
+      i18nKey: 'errors.validation.unsupportedProtocol',
+      params: {},
+    });
   }
   // Credentials in the URL would be forwarded to the target and echoed back in every
   // "requested URL" field we render. Nothing here needs them, so drop them.

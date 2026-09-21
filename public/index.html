@@ -8,23 +8,29 @@
 <body>
   <div id="header-row">
     <h1>Audio analyzer</h1>
+    <label for="lang-switcher" class="visually-hidden" data-i18n="common.language">Language</label>
+    <select id="lang-switcher">
+      <option value="sv">Svenska</option>
+      <option value="en">English</option>
+    </select>
   </div>
 
   <form id="analyze-form">
-    <label for="url-input" class="visually-hidden">Ström-URL</label>
+    <label for="url-input" class="visually-hidden" data-i18n="nav.urlLabel">Ström-URL</label>
     <input
       type="url"
       id="url-input"
+      data-i18n-placeholder="nav.urlPlaceholder"
       placeholder="Ström-URL – HLS, DASH eller Icecast/radio"
       required
     />
-    <button type="submit" id="analyze-btn">Analysera</button>
-    <button type="button" id="log-btn" title="Följ strömmen över tid i stället för att ta en ögonblicksbild">Logga</button>
+    <button type="submit" id="analyze-btn" data-i18n="nav.analyzeBtn">Analysera</button>
+    <button type="button" id="log-btn" data-i18n="nav.logBtn" data-i18n-title="nav.logBtnTitle" title="Följ strömmen över tid i stället för att ta en ögonblicksbild">Logga</button>
   </form>
 
   <p id="file-row">
-    eller analysera en ljudfil:
-    <label for="file-input" id="file-pick">Välj ljudfil…</label>
+    <span data-i18n="nav.fileRowPrefix">eller analysera en ljudfil:</span>
+    <label for="file-input" id="file-pick" data-i18n="nav.filePick">Välj ljudfil…</label>
     <input
       type="file"
       id="file-input"
@@ -35,100 +41,43 @@
   </p>
 
   <details id="faq">
-    <summary>Om verktyget</summary>
+    <summary data-i18n="faq.summary">Om verktyget</summary>
 
-    <p>
-      Audio analyzer hämtar och analyserar en ljudström: anslutning och CORS, ljudkodek,
-      segment och buffert, latens, uppmätt bitrate, "nu spelas" och det råa manifestet.
-      Välj <strong>Analysera</strong> för en nulägesbild med alla metadata eller <strong>Logga</strong> för att
-      i stället följa strömmens ljudnivå över tid.
-      Hämtningarna görs på servern (CDN:er skickar sällan CORS-headers) och ljudet
-      inspekteras med <code>ffprobe</code>/<code>ffmpeg</code>. HLS (<code>.m3u8</code>),
-      MPEG-DASH (<code>.mpd</code>) och Icecast/SHOUTcast/RSAS.
-    </p>
+    <p data-i18n-html="faq.intro"></p>
 
     <details>
-      <summary>Hur hittar jag HLS-adressen (<code>.m3u8</code>)?</summary>
-      <p>
-        Öppna sidan som spelar upp strömmen, öppna webbläsarens utvecklarverktyg (F12)
-        → fliken Nätverk, filtrera på <code>m3u8</code>. Starta uppspelningen och URL:en
-        som dyker upp (ofta <code>master.m3u8</code>, <code>playlist.m3u8</code> eller
-        <code>chunklist.m3u8</code>) är den du klistrar in här. Ibland ligger den också
-        direkt i sidkällan eller i en <code>&lt;video&gt;</code>/<code>&lt;source&gt;</code>-tagg.
-      </p>
+      <summary data-i18n-html="faq.hlsSummary"></summary>
+      <p data-i18n-html="faq.hlsBody"></p>
     </details>
 
     <details>
-      <summary>Hur hittar jag DASH-adressen (<code>.mpd</code>)?</summary>
-      <p>
-        Samma sätt som för HLS: utvecklarverktyg → Nätverk, filtrera på <code>mpd</code>
-        eller <code>dash</code>. URL:en slutar på <code>.mpd</code> (ofta
-        <code>manifest.mpd</code> eller <code>Manifest.mpd</code>). DASH är vanligare
-        för TV/video än för renodlade ljudströmmar.
-      </p>
+      <summary data-i18n-html="faq.dashSummary"></summary>
+      <p data-i18n-html="faq.dashBody"></p>
     </details>
 
     <details>
-      <summary>Hur hittar jag Icecast-/radioadressen?</summary>
-      <p>
-        Radioströmmar är oftast en direkt URL till en "mount" — t.ex.
-        <code>.../stream</code>, <code>.../live</code>, <code>.../128</code> eller något
-        som slutar på <code>.mp3</code>/<code>.aac</code>. Hitta den genom att:
-      </p>
-      <p>
-        (1) ladda ner stationens spellista (<code>.pls</code>- eller <code>.m3u</code>-fil,
-        ofta bakom en "lyssna i extern spelare"-länk) och öppna den i en textredigerare,
-        den innehåller den råa URL:en.
-      </p>
-      <p>
-        (2) utvecklarverktyg → Nätverk, filtrera på <code>media</code> eller <code>mp3</code> 
-        medan strömmen spelar; eller (3) titta i stationens egen lista över direktlänkar.
-      </p>
+      <summary data-i18n-html="faq.icecastSummary"></summary>
+      <p data-i18n-html="faq.icecastBody1"></p>
+      <p data-i18n-html="faq.icecastBody2"></p>
+      <p data-i18n-html="faq.icecastBody3"></p>
     </details>
 
     <details>
-      <summary>Vad får jag ut av att analysera en fil?</summary>
-      <p>
-        Ladda upp en färdig ljudfil så mäts hela den: all metadata (codec, bitdjup,
-        samplingsfrekvens, taggar, omslagsbild, kapitel), ljudnivå (LUFS) och true peak
-        som en kurva över hela filen, dynamik (LRA, crest factor, klippning), stereobild
-        och fas, samt ett spektrogram – där en spikrak kant högt upp avslöjar en fil som
-        gjorts från en lossy källa (t.ex. en MP3 omkodad till FLAC).
-      </p>
-      <p>
-        Filen laddas upp till verktygets server, analyseras med ffmpeg och sparas inte.
-      </p>
+      <summary data-i18n-html="faq.fileSummary"></summary>
+      <p data-i18n-html="faq.fileBody1"></p>
+      <p data-i18n="faq.fileBody2"></p>
     </details>
 
     <details>
-      <summary>Hur fungerar loggningen?</summary>
-      <p>
-        Loggningen spelar in 15 sekunder av ljudet, mäter ljudnivå (LUFS, True Peak)
-        och tystnad i det provet, och startar sedan genast nästa 15-sekundersinspelning.
-        Mätningen sker alltså löpande, inte bara som enstaka stickprov med jämna mellanrum. 
-        En tystnad som sträcker sig över gränsen mellan två inspelningar fångas i sin helhet,
-        med korrekt start och sluttid.
-      </p>
-      <p>
-        Loggen lever bara i den här webbläsarfliken. Stänger du fliken utan att
-        exportera (JSON eller CSV) försvinner den. Loggningen går inte pausa, utan enbart stoppa.
-        Klickar du Logga igen börjar en helt ny logg från noll.
-      </p>
-      <p>
-        Går verktygets egen server ner mitt i en loggning (skiljt från att själva
-        ljudströmmen har problem) så stoppar loggningen automatiskt efter två misslyckade försök 
-        i rad.
-      </p>
+      <summary data-i18n-html="faq.loggingSummary"></summary>
+      <p data-i18n-html="faq.loggingBody1"></p>
+      <p data-i18n-html="faq.loggingBody2"></p>
+      <p data-i18n-html="faq.loggingBody3"></p>
     </details>
 
     <details>
-      <summary>Varför misslyckas analysen ibland?</summary>
-      <p>
-        Vanliga orsaker: geoblockering (svar 403, ofta med tom kropp), DRM-skyddad DASH
-        (skyddet visas men ffprobe kan inte avkoda ljudet), en URL som pekar på en
-        spelarsida i stället för på själva manifestet, eller en äldre SHOUTcast v1-server
-        som svarar med raden <code>ICY 200 OK</code> i stället för vanlig HTTP.
-      </p>
+      <summary data-i18n-html="faq.whyFailsSummary"></summary>
+      <p data-i18n-html="faq.whyFailsBody"></p>
     </details>
   </details>
 
@@ -143,7 +92,9 @@
     <a href="https://github.com/zakariasfaust/audio-analyzer" target="_blank" rel="noopener">GitHub</a>
   </footer>
 
-  <script src="terms.js"></script>
+  <script src="i18n.js"></script>
+  <script src="i18n/sv.js"></script>
+  <script src="i18n/en.js"></script>
   <script src="shared.js"></script>
   <script src="app.js"></script>
   <script src="log.js"></script>

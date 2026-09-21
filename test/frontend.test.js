@@ -29,7 +29,8 @@ function loadApp() {
   // safeHttpUrl's try/catch would swallow a ReferenceError and look like a rejection.
   const context = vm.createContext({
     document: { getElementById: () => element() },
-    navigator: { clipboard: { writeText: async () => {} } },
+    navigator: { language: 'sv', languages: ['sv'], clipboard: { writeText: async () => {} } },
+    localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
     URL,
     URLSearchParams,
     fetch: async () => {
@@ -39,9 +40,10 @@ function loadApp() {
     console,
   });
 
-  for (const file of ['terms.js', 'shared.js', 'app.js']) {
+  for (const file of ['i18n.js', 'i18n/sv.js', 'i18n/en.js', 'shared.js', 'app.js']) {
     vm.runInContext(fs.readFileSync(path.join(publicDir, file), 'utf8'), context, { filename: file });
   }
+  context.setLocale('sv');
   return context;
 }
 
@@ -193,7 +195,24 @@ test('the Icecast copy text carries the shared sections, including Expires', () 
     assert.ok(text.includes(heading), `missing section: ${heading}`);
   }
   assert.match(text, /^Expires: /m);
-  assert.match(text, /avstängd \(ENABLE_IP_GEO=1/);
+  // ipGeoEnabled: false - the IP-geo line is left out of the copy text entirely
+  // rather than printed as a permanent "disabled" line (same as the rendered <dl>).
+  assert.ok(!text.includes('Geografisk uppskattning'), 'ip-geo line should be omitted when disabled');
+});
+
+test('the IP-geo line appears in both the rendered dl and the copy text once enabled', () => {
+  const enabledPayload = {
+    ...icecastPayload,
+    networkPath: {
+      ...icecastPayload.networkPath,
+      dns: { ...icecastPayload.networkPath.dns, ipGeoEnabled: true, ipGeo: [{ city: 'Stockholm', country: 'SE' }] },
+    },
+  };
+  const html = app.renderNetworkPath(enabledPayload.networkPath);
+  assert.match(html, /Stockholm, SE/);
+
+  const text = app.buildCopyText(enabledPayload, null, null, null);
+  assert.match(text, /Geografisk uppskattning.*Stockholm, SE/s);
 });
 
 test('sample warnings reach the copy text instead of being reported as "no metadata"', () => {

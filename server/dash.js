@@ -41,10 +41,11 @@ function assertTimelinesBounded(parsed, url) {
       for (const representation of adaptationSet.representations) {
         const entries = representation.segmentTemplate?.timeline?.length ?? 0;
         if (entries > MAX_TIMELINE_ENTRIES) {
-          throw new InvalidMpdError(
-            url,
-            `SegmentTimeline för representation "${representation.id}" har ${entries} <S>-poster (tak: ${MAX_TIMELINE_ENTRIES}).`
-          );
+          throw new InvalidMpdError(url, null, {
+            message: `SegmentTimeline for representation "${representation.id}" has ${entries} <S> entries (cap: ${MAX_TIMELINE_ENTRIES}).`,
+            i18nKey: 'errors.dashTimelineTooLarge',
+            params: { representationId: representation.id, entries, maxEntries: MAX_TIMELINE_ENTRIES },
+          });
         }
       }
     }
@@ -411,7 +412,10 @@ export async function analyzeDash(url, { signal, connection: prefetched } = {}) 
 
   const chosen = chooseDashAudioRepresentation(mpd.parsed);
   if (!chosen) {
-    throw new InvalidMpdError(url, 'MPD:ns första Period innehåller ingen Representation att analysera.');
+    throw new InvalidMpdError(url, null, {
+      message: "The MPD's first Period contains no Representation to analyze.",
+      i18nKey: 'errors.dashNoRepresentation',
+    });
   }
 
   const segments = computeDashSegmentStats(mpd.parsed, chosen);

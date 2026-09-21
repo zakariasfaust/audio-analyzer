@@ -2,6 +2,11 @@
 // Vanilla JS - no build step, no import/export. Runs directly in the browser.
 // Clicking Analyze: POST /api/analyze (status snapshot) followed by
 // GET /api/sample (ID3/"now playing") - the result is rendered into #results.
+//
+// Every user-facing string here goes through t()/tPlural() (see i18n.js and
+// i18n/sv.js, i18n/en.js) instead of being a literal. Section headings are defined
+// once in Title Case and reused for the "Copy analysis" text's uppercase headings via
+// .toUpperCase(), so there is one translated string per heading, not two.
 
 const form = document.getElementById('analyze-form');
 const urlInput = document.getElementById('url-input');
@@ -20,8 +25,9 @@ function setCopyEnabled(enabled) {
   if (btn) btn.disabled = !enabled;
 }
 
-// Latest analysis result - kept in memory so the Copy button can build
-// the text excerpt without redoing any network requests.
+// Latest analysis result - kept in memory so the Copy button can build the text
+// excerpt without redoing any network requests, and so a language switch (see the
+// onLocaleChange hook near the bottom of this file) can re-render without one either.
 let lastAnalyzeData = null;
 let lastSampleData = null;
 let lastSampleError = null;
@@ -29,25 +35,13 @@ let lastSampleError = null;
 // ---------------------------------------------------------------------
 // Wording for the codes the server returns. The server reports what it found
 // ('timeline', 'vod', a signed TIME-OFFSET); every sentence the user reads is
-// built here, so the phrasing lives in one place instead of two.
+// built here, from the catalog, so the phrasing lives in one place instead of two.
 // ---------------------------------------------------------------------
 
-const DASH_ADDRESSING_LABELS = {
-  timeline: 'SegmentTimeline',
-  'template-number': 'SegmentTemplate ($Number$)',
-  'segment-list': 'SegmentList',
-  'base-url': 'Enkel fil (BaseURL/SegmentBase)',
-  none: 'Ingen segmentadressering hittades',
-  unknown: 'Okänd',
-};
-
-const DASH_NO_LATENCY_REASONS = {
-  vod: 'VOD (static MPD) - ingen live-fördröjning att beräkna.',
-  'no-availability-start-time': 'availabilityStartTime saknas eller kunde inte tolkas.',
-};
-
 function dashAddressingLabel(code) {
-  return DASH_ADDRESSING_LABELS[code] || DASH_ADDRESSING_LABELS.unknown;
+  return t(`dash.addressingLabels.${code}`) !== `dash.addressingLabels.${code}`
+    ? t(`dash.addressingLabels.${code}`)
+    : t('dash.addressingLabels.unknown');
 }
 
 // EXT-X-START: a negative TIME-OFFSET is measured back from the live edge, a
@@ -56,8 +50,26 @@ function startPointExplanation(startInfo) {
   if (!startInfo || startInfo.timeOffset === null || startInfo.timeOffset === undefined) return null;
   const offset = startInfo.timeOffset;
   return offset < 0
-    ? `Spelaren startar ${fmtNumber(Math.abs(offset))} sekunder bakom livekanten.`
-    : `Spelaren startar ${fmtNumber(offset)} sekunder efter fönstrets början.`;
+    ? t('continuity.startBehind', { offset: fmtNumber(Math.abs(offset)) })
+    : t('continuity.startAfterWindow', { offset: fmtNumber(offset) });
+}
+
+// Small shared phrases used by both a render function and its copy-text twin, so a
+// translation lives once even where the two outputs aren't otherwise built from a
+// shared field() list (see shared.js). Mirrors the pattern startPointExplanation()
+// and dashRepresentationNotes() already used before this migration.
+function yesNo(value) {
+  return value ? t('common.yes') : t('common.no');
+}
+
+function corsSummaryHtml(c) {
+  return c.cors.present
+    ? `<dd>${t('connection.corsPresent', { allowOrigin: esc(c.cors.allowOrigin) })}</dd>`
+    : `<dd class="error">${esc(t('connection.corsMissing'))}</dd>`;
+}
+
+function corsSummaryCopy(c) {
+  return c.cors.present ? t('connection.corsPresent', { allowOrigin: c.cors.allowOrigin }) : t('connection.corsMissingShort');
 }
 
 // ---------------------------------------------------------------------
@@ -66,31 +78,27 @@ function startPointExplanation(startInfo) {
 // ---------------------------------------------------------------------
 
 function renderConnection(c) {
-  const corsLine = c.cors.present
-    ? `<dd>Ja (${esc(c.cors.allowOrigin)})</dd>`
-    : `<dd class="error">Nej - CORS-headers saknas. En webbläsarbaserad spelare kan inte hämta strömmen direkt från CDN:en utan en proxy som den här backend:en.</dd>`;
-
   const extra = Object.entries(c.extraHeaders || {});
   const extraHtml = extra.length
-    ? `<table><thead><tr><th>Header</th><th>Värde</th></tr></thead><tbody>${extra
+    ? `<table><thead><tr><th>${esc(t('connection.headerTableName'))}</th><th>${esc(t('connection.headerTableValue'))}</th></tr></thead><tbody>${extra
         .map(([k, v]) => `<tr><td>${esc(k)}</td><td>${esc(v)}</td></tr>`)
         .join('')}</tbody></table>`
-    : '<p class="note">Inga x-, akamai- eller icy-headers.</p>';
+    : `<p class="note">${esc(t('connection.extraHeadersMissing'))}</p>`;
 
   return `
     <section id="sec-connection">
-      ${withHint('h2', 'Anslutning', 'anslutning')}
+      ${withHint('h2', t('connection.heading'), 'anslutning')}
       <dl>
-        ${withHint('dt', 'Status', 'status')}<dd>${c.status} ${esc(c.statusText)}</dd>
-        ${withHint('dt', 'Begärd URL', 'begard-url')}<dd>${esc(c.requestedUrl)}</dd>
-        ${withHint('dt', 'Slutlig URL', 'slutlig-url')}<dd>${esc(c.finalUrl)}${c.redirected ? ' (omdirigerad)' : ''}</dd>
-        ${withHint('dt', 'Content-Type', 'content-type')}<dd>${esc(c.contentType) || '–'}</dd>
-        ${withHint('dt', 'Server', 'server')}<dd>${esc(c.server) || '–'}</dd>
-        ${withHint('dt', 'Cache-Control', 'cache-control')}<dd>${esc(c.cacheControl) || '–'}</dd>
-        ${withHint('dt', 'Expires', 'expires')}<dd>${esc(c.expires) || '–'}</dd>
-        ${withHint('dt', 'CORS', 'cors')}${corsLine}
+        ${withHint('dt', t('connection.status'), 'status')}<dd>${c.status} ${esc(c.statusText)}</dd>
+        ${withHint('dt', t('connection.requestedUrl'), 'begard-url')}<dd>${esc(c.requestedUrl)}</dd>
+        ${withHint('dt', t('connection.finalUrl'), 'slutlig-url')}<dd>${esc(c.finalUrl)}${c.redirected ? ` (${esc(t('connection.redirectedSuffix'))})` : ''}</dd>
+        ${withHint('dt', t('connection.contentType'), 'content-type')}<dd>${esc(c.contentType) || '–'}</dd>
+        ${withHint('dt', t('connection.server'), 'server')}<dd>${esc(c.server) || '–'}</dd>
+        ${withHint('dt', t('connection.cacheControl'), 'cache-control')}<dd>${esc(c.cacheControl) || '–'}</dd>
+        ${withHint('dt', t('connection.expires'), 'expires')}<dd>${esc(c.expires) || '–'}</dd>
+        ${withHint('dt', t('connection.cors'), 'cors')}${corsSummaryHtml(c)}
       </dl>
-      ${withHint('h3', 'x- / akamai- / icy-headers', 'extra-headers')}
+      ${withHint('h3', t('connection.extraHeadersHeading'), 'extra-headers')}
       ${extraHtml}
     </section>`;
 }
@@ -99,15 +107,15 @@ function renderVariants(v, activeUrl) {
   if (v.singleVariantNote) {
     return `
       <section id="sec-variants">
-        ${withHint('h2', 'Varianter', 'varianter')}
-        <p class="note">Endast en variant tillgänglig. URL:en pekar direkt på media-playlistan.</p>
+        ${withHint('h2', t('variants.heading'), 'varianter')}
+        <p class="note">${esc(t('variants.singleVariantNote'))}</p>
       </section>`;
   }
   const rows = v.list
     .map((variant) => {
       const isActive = variant.url === activeUrl;
       return `
-      <tr class="variant-row${isActive ? ' variant-active' : ''}" data-variant-url="${esc(variant.url)}" tabindex="0" title="Klicka för att analysera den här varianten">
+      <tr class="variant-row${isActive ? ' variant-active' : ''}" data-variant-url="${esc(variant.url)}" tabindex="0" title="${esc(t('variants.rowTitle'))}">
         <td>${fmtInt(variant.bandwidth ? variant.bandwidth / 1000 : null)}</td>
         <td>${fmtInt(variant.averageBandwidth ? variant.averageBandwidth / 1000 : null)}</td>
         <td>${esc(variant.codecs) || '–'}</td>
@@ -118,10 +126,10 @@ function renderVariants(v, activeUrl) {
     .join('');
   return `
     <section id="sec-variants">
-      ${withHint('h2', 'Varianter', 'varianter')}
-      <p class="note">Klicka på en rad för att analysera just den varianten.</p>
+      ${withHint('h2', t('variants.heading'), 'varianter')}
+      <p class="note">${esc(t('variants.clickHint'))}</p>
       <table>
-        <thead><tr>${withHint('th', 'Bandbredd (kbit/s)', 'variant-bandbredd')}${withHint('th', 'Snitt (kbit/s)', 'variant-snitt')}${withHint('th', 'Codecs', 'codecs')}${withHint('th', 'Upplösning', 'upplosning')}${withHint('th', 'URL', 'variant-url')}</tr></thead>
+        <thead><tr>${withHint('th', t('variants.bandwidthHeader'), 'variant-bandbredd')}${withHint('th', t('variants.averageHeader'), 'variant-snitt')}${withHint('th', t('variants.codecsHeader'), 'codecs')}${withHint('th', t('variants.resolutionHeader'), 'upplosning')}${withHint('th', t('variants.urlHeader'), 'variant-url')}</tr></thead>
         <tbody>${rows}</tbody>
       </table>
     </section>`;
@@ -131,34 +139,34 @@ function renderVariants(v, activeUrl) {
 // writes them as text, for all four views. See field() in shared.js.
 function audioFields(a) {
   return [
-    field('Codec', 'codec', (a.codec || '–') + (a.profile ? ` (${a.profile})` : '')),
-    field('Samplingsfrekvens', 'samplingsfrekvens', a.sampleRate ? fmtInt(a.sampleRate) + ' Hz' : '–'),
-    field('Kanaler', 'kanaler', `${a.channels ?? '–'}${a.channelLayout ? ` (${a.channelLayout})` : ''}`),
-    field('Bitrate', 'audio-bitrate', a.bitRate ? fmtNumber(a.bitRate / 1000) + ' kbit/s' : 'okänd (se uppmätt bitrate nedan)'),
-    field('Container', 'container', a.container || '–'),
+    field(t('audio.codec'), 'codec', (a.codec || '–') + (a.profile ? ` (${a.profile})` : '')),
+    field(t('audio.sampleRate'), 'samplingsfrekvens', a.sampleRate ? fmtInt(a.sampleRate) + ' Hz' : '–'),
+    field(t('audio.channels'), 'kanaler', `${a.channels ?? '–'}${a.channelLayout ? ` (${a.channelLayout})` : ''}`),
+    field(t('audio.bitrate'), 'audio-bitrate', a.bitRate ? fmtNumber(a.bitRate / 1000) + ' kbit/s' : t('audio.bitrateUnknown')),
+    field(t('audio.container'), 'container', a.container || '–'),
   ];
 }
 
 function renderAudio(a) {
-  const head = withHint('h2', 'Ljudspåret', 'ljud');
-  const body = a ? renderDl(audioFields(a)) : '<p class="note">Kunde inte hämtas (se varningar ovan).</p>';
+  const head = withHint('h2', t('audio.heading'), 'ljud');
+  const body = a ? renderDl(audioFields(a)) : `<p class="note">${esc(t('audio.unavailable'))}</p>`;
   return `<section id="sec-audio">${head}${body}</section>`;
 }
 
 function renderSegments(s, continuity) {
   return `
     <section id="sec-segments">
-      ${withHint('h2', 'Segment och buffert', 'segment')}
+      ${withHint('h2', t('segments.heading'), 'segment')}
       <dl>
-        ${withHint('dt', 'Version', 'version')}<dd>${s.version ?? '–'}</dd>
-        ${withHint('dt', 'Target duration', 'targetduration')}<dd>${fmtDuration(s.targetDuration, 0)}</dd>
-        ${withHint('dt', 'Media sequence', 'mediasequence')}<dd>${fmtInt(s.mediaSequence)}</dd>
-        ${withHint('dt', 'Typ', 'typ')}<dd>${s.isLive ? 'Live' : 'VOD'}${s.playlistType ? ' (' + esc(s.playlistType) + ')' : ''}</dd>
-        ${withHint('dt', 'Antal segment i fönstret', 'antal-segment')}<dd>${s.segmentCount}</dd>
-        ${withHint('dt', 'Fönsterlängd', 'fonsterlangd')}<dd>${fmtDuration(s.windowSeconds)}</dd>
-        ${withHint('dt', 'Snittlängd/segment', 'snittlangd')}<dd>${fmtDuration(s.avgSegmentDuration)}</dd>
-        ${withHint('dt', 'Kryptering', 'krypterat')}<dd>${s.encrypted ? esc(s.keyMethod) : 'Av'}</dd>
-        ${withHint('dt', 'Segmentformat', 'fmp4')}<dd>${s.fmp4 ? 'Fragmenterad MP4 (fMP4)' : 'Ej fragmenterat (MPEG-TS)'}</dd>
+        ${withHint('dt', t('segments.version'), 'version')}<dd>${s.version ?? '–'}</dd>
+        ${withHint('dt', t('segments.targetDuration'), 'targetduration')}<dd>${fmtDuration(s.targetDuration, 0)}</dd>
+        ${withHint('dt', t('segments.mediaSequence'), 'mediasequence')}<dd>${fmtInt(s.mediaSequence)}</dd>
+        ${withHint('dt', t('segments.type'), 'typ')}<dd>${s.isLive ? t('segments.live') : t('segments.vod')}${s.playlistType ? ' (' + esc(s.playlistType) + ')' : ''}</dd>
+        ${withHint('dt', t('segments.segmentCount'), 'antal-segment')}<dd>${s.segmentCount}</dd>
+        ${withHint('dt', t('segments.windowLength'), 'fonsterlangd')}<dd>${fmtDuration(s.windowSeconds)}</dd>
+        ${withHint('dt', t('segments.avgLength'), 'snittlangd')}<dd>${fmtDuration(s.avgSegmentDuration)}</dd>
+        ${withHint('dt', t('segments.encryption'), 'krypterat')}<dd>${s.encrypted ? esc(s.keyMethod) : t('segments.off')}</dd>
+        ${withHint('dt', t('segments.format'), 'fmp4')}<dd>${s.fmp4 ? t('segments.fmp4') : t('segments.mpegts')}</dd>
       </dl>
       ${renderContinuity(continuity)}
     </section>`;
@@ -170,24 +178,27 @@ function renderSegments(s, continuity) {
 function renderContinuity(c) {
   const discontinuityLine =
     c.discontinuityCount === 0
-      ? 'Inga i det aktuella fönstret.'
-      : `${c.discontinuityCount} st - vid sekvensnummer ${c.discontinuityPositions.map((n) => fmtInt(n)).join(', ')}.`;
+      ? t('continuity.discontinuitiesNone')
+      : t('continuity.discontinuitiesCount', {
+          count: c.discontinuityCount,
+          positions: c.discontinuityPositions.map((n) => fmtInt(n)).join(', '),
+        });
 
   const startLine = c.startInfo
     ? `TIME-OFFSET=${esc(c.startInfo.timeOffset)}${c.startInfo.precise ? ' (PRECISE)' : ''} - ${esc(
         startPointExplanation(c.startInfo)
       )}`
-    : 'Hittades inte.';
+    : esc(t('continuity.startNotFound'));
 
   return `
     <div class="subsection">
-      ${withHint('h3', 'Kontinuitet och startpunkt', 'kontinuitet')}
+      ${withHint('h3', t('continuity.heading'), 'kontinuitet')}
       <dl>
-        ${withHint('dt', 'EXT-X-DISCONTINUITY-SEQUENCE', 'discontinuity-sequence')}<dd>${
-          c.discontinuitySequence !== null ? fmtInt(c.discontinuitySequence) : 'Hittades inte (standard: 0)'
+        ${withHint('dt', t('continuity.discontinuitySeqLabel'), 'discontinuity-sequence')}<dd>${
+          c.discontinuitySequence !== null ? fmtInt(c.discontinuitySequence) : esc(t('continuity.discontinuitySeqNotFound'))
         }</dd>
-        ${withHint('dt', 'Discontinuities', 'discontinuities')}<dd>${discontinuityLine}</dd>
-        ${withHint('dt', 'EXT-X-START', 'ext-x-start')}<dd>${startLine}</dd>
+        ${withHint('dt', t('continuity.discontinuitiesLabel'), 'discontinuities')}<dd>${discontinuityLine}</dd>
+        ${withHint('dt', t('continuity.startLabel'), 'ext-x-start')}<dd>${startLine}</dd>
       </dl>
     </div>`;
 }
@@ -199,69 +210,68 @@ function renderContinuity(c) {
 // false) but the manifest itself lacks all the tags.
 function renderLowLatency(ll) {
   const contradictionNote = ll.contradiction
-    ? `<p class="note error">Motsägelse: CDN-headern <code>${esc(ll.contradiction.header)}: ${esc(
-        ll.contradiction.value
-      )}</code> antyder LL-HLS-stöd, men inga LL-HLS-taggar hittades i manifestet.</p>`
+    ? `<p class="note error">${t('lowLatency.contradiction', { header: esc(ll.contradiction.header), value: esc(ll.contradiction.value) })}</p>`
     : '';
 
   if (!ll.present) {
     return `
       <div class="subsection">
-        ${withHint('h3', 'Low-Latency HLS', 'llhls')}
-        <p class="note">Inga LL-HLS-taggar hittades i manifestet.</p>
+        ${withHint('h3', t('lowLatency.heading'), 'llhls')}
+        <p class="note">${esc(t('lowLatency.notPresent'))}</p>
         ${contradictionNote}
       </div>`;
   }
 
   const sc = ll.serverControl;
+  const notFound = esc(t('common.notFound'));
 
   const partsTable = (parts) =>
     parts.length
-      ? `<table><thead><tr><th>#</th><th>Längd</th><th>Oberoende (INDEPENDENT)</th><th>URI</th></tr></thead><tbody>${parts
+      ? `<table><thead><tr><th>${esc(t('lowLatency.partsIndexHeader'))}</th><th>${esc(t('lowLatency.partsDurationHeader'))}</th><th>${esc(t('lowLatency.partsIndependentHeader'))}</th><th>${esc(t('lowLatency.partsUriHeader'))}</th></tr></thead><tbody>${parts
           .map(
             (p, i) =>
-              `<tr><td>${i + 1}</td><td>${fmtDuration(p.duration)}</td><td>${p.independent ? 'Ja' : 'Nej'}</td><td>${esc(
+              `<tr><td>${i + 1}</td><td>${fmtDuration(p.duration)}</td><td>${esc(yesNo(p.independent))}</td><td>${esc(
                 p.uri
               )}</td></tr>`
           )
           .join('')}</tbody></table>`
-      : '<p class="note">Hittades inte.</p>';
+      : `<p class="note">${notFound}</p>`;
 
   const renditionTable = ll.renditionReports.length
-    ? `<table><thead><tr><th>Rendition</th><th>Senaste media-sequence</th><th>Senaste part</th></tr></thead><tbody>${ll.renditionReports
+    ? `<table><thead><tr><th>${esc(t('lowLatency.renditionHeader'))}</th><th>${esc(t('lowLatency.renditionLastMsnHeader'))}</th><th>${esc(t('lowLatency.renditionLastPartHeader'))}</th></tr></thead><tbody>${ll.renditionReports
         .map((r) => `<tr><td>${esc(r.uri)}</td><td>${r.lastMsn ?? '–'}</td><td>${r.lastPart ?? '–'}</td></tr>`)
         .join('')}</tbody></table>`
-    : '<p class="note">Hittades inte.</p>';
+    : `<p class="note">${notFound}</p>`;
 
   return `
     <div class="subsection">
-      ${withHint('h3', 'Low-Latency HLS', 'llhls')}
+      ${withHint('h3', t('lowLatency.heading'), 'llhls')}
       ${contradictionNote}
       <dl>
-        ${withHint('dt', 'CAN-BLOCK-RELOAD', 'll-can-block-reload')}<dd>${sc ? (sc.canBlockReload ? 'Ja' : 'Nej') : 'Hittades inte'}</dd>
-        ${withHint('dt', 'HOLD-BACK', 'll-hold-back')}<dd>${sc && sc.holdBack !== null ? fmtDuration(sc.holdBack) : 'Hittades inte'}</dd>
-        ${withHint('dt', 'PART-HOLD-BACK', 'll-part-hold-back')}<dd>${
-          sc && sc.partHoldBack !== null ? fmtDuration(sc.partHoldBack) : 'Hittades inte'
+        ${withHint('dt', t('lowLatency.canBlockReload'), 'll-can-block-reload')}<dd>${sc ? esc(yesNo(sc.canBlockReload)) : notFound}</dd>
+        ${withHint('dt', t('lowLatency.holdBack'), 'll-hold-back')}<dd>${sc && sc.holdBack !== null ? fmtDuration(sc.holdBack) : notFound}</dd>
+        ${withHint('dt', t('lowLatency.partHoldBack'), 'll-part-hold-back')}<dd>${
+          sc && sc.partHoldBack !== null ? fmtDuration(sc.partHoldBack) : notFound
         }</dd>
-        ${withHint('dt', 'CAN-SKIP-UNTIL', 'll-can-skip-until')}<dd>${
-          sc && sc.canSkipUntil !== null ? fmtDuration(sc.canSkipUntil) : 'Hittades inte'
+        ${withHint('dt', t('lowLatency.canSkipUntil'), 'll-can-skip-until')}<dd>${
+          sc && sc.canSkipUntil !== null ? fmtDuration(sc.canSkipUntil) : notFound
         }</dd>
-        ${withHint('dt', 'CAN-SKIP-DATERANGES', 'll-can-skip-dateranges')}<dd>${sc ? (sc.canSkipDateranges ? 'Ja' : 'Nej') : 'Hittades inte'}</dd>
-        ${withHint('dt', 'PART-TARGET', 'll-part-target')}<dd>${ll.partTargetDuration ? fmtDuration(ll.partTargetDuration) : 'Hittades inte'}</dd>
+        ${withHint('dt', t('lowLatency.canSkipDateranges'), 'll-can-skip-dateranges')}<dd>${sc ? esc(yesNo(sc.canSkipDateranges)) : notFound}</dd>
+        ${withHint('dt', t('lowLatency.partTarget'), 'll-part-target')}<dd>${ll.partTargetDuration ? fmtDuration(ll.partTargetDuration) : notFound}</dd>
       </dl>
-      <p class="note">Delsegment (EXT-X-PART) i senaste färdiga segmentet:</p>
+      <p class="note">${esc(t('lowLatency.partsIntro'))}</p>
       ${partsTable(ll.lastSegmentParts)}
       ${
         ll.trailingParts.length
-          ? `<p class="note">Delsegment för nästa, ännu ej färdiga segment:</p>${partsTable(ll.trailingParts)}`
+          ? `<p class="note">${esc(t('lowLatency.nextPartsIntro'))}</p>${partsTable(ll.trailingParts)}`
           : ''
       }
       <dl>
-        ${withHint('dt', 'PRELOAD-HINT', 'll-preload-hint')}<dd>${
-          ll.preloadHint ? `${esc(ll.preloadHint.type)}: ${esc(ll.preloadHint.uri)}` : 'Hittades inte'
+        ${withHint('dt', t('lowLatency.preloadHint'), 'll-preload-hint')}<dd>${
+          ll.preloadHint ? `${esc(ll.preloadHint.type)}: ${esc(ll.preloadHint.uri)}` : notFound
         }</dd>
       </dl>
-      <p class="note">RENDITION-REPORT (status för andra renditions):</p>
+      <p class="note">${esc(t('lowLatency.renditionReportIntro'))}</p>
       ${renditionTable}
     </div>`;
 }
@@ -270,21 +280,21 @@ function renderLatency(l, lowLatency) {
   if (!l.available) {
     return `
       <section id="sec-latency">
-        ${withHint('h2', 'Latens', 'latens')}
-        <p class="note">Latens kan inte beräknas (ingen PROGRAM-DATE-TIME-tidsstämpel i manifestet).</p>
+        ${withHint('h2', t('latency.heading'), 'latens')}
+        <p class="note">${esc(t('latency.unavailable'))}</p>
         ${renderLowLatency(lowLatency)}
       </section>`;
   }
-  const methodLabel = l.method === 'measured' ? 'Uppmätt direkt' : 'Beräknad från segmentsumma';
+  const methodLabel = l.method === 'measured' ? t('latency.methodMeasured') : t('latency.methodCalculated');
   return `
     <section id="sec-latency">
-      ${withHint('h2', 'Latens', 'latens')}
+      ${withHint('h2', t('latency.heading'), 'latens')}
       <dl>
-        ${withHint('dt', 'Beräkningsmetod', 'latens-metod')}<dd>${methodLabel} (${l.taggedSegmentCount} taggat${l.taggedSegmentCount === 1 ? '' : 'a'} segment)</dd>
-        ${withHint('dt', 'Äldsta segmentets tidsstämpel', 'aldsta-ts')}<dd>${fmtDateTime(l.oldestProgramDateTime)}</dd>
-        ${withHint('dt', 'Nyaste segmentets tidsstämpel', 'nyaste-ts')}<dd>${fmtDateTime(l.newestProgramDateTime)}</dd>
-        ${withHint('dt', 'Fördröjning (från äldsta)', 'fordrojning-aldsta')}<dd>${fmtDuration(l.delaySecondsFromOldest)}</dd>
-        ${withHint('dt', 'Fördröjning (från nyaste, live-kant)', 'fordrojning-nyaste')}<dd>${fmtDuration(l.delaySecondsFromNewest)}</dd>
+        ${withHint('dt', t('latency.method'), 'latens-metod')}<dd>${esc(methodLabel)} (${esc(tPlural('latency.taggedSegments', l.taggedSegmentCount))})</dd>
+        ${withHint('dt', t('latency.oldestTs'), 'aldsta-ts')}<dd>${fmtDateTime(l.oldestProgramDateTime)}</dd>
+        ${withHint('dt', t('latency.newestTs'), 'nyaste-ts')}<dd>${fmtDateTime(l.newestProgramDateTime)}</dd>
+        ${withHint('dt', t('latency.delayFromOldest'), 'fordrojning-aldsta')}<dd>${fmtDuration(l.delaySecondsFromOldest)}</dd>
+        ${withHint('dt', t('latency.delayFromNewest'), 'fordrojning-nyaste')}<dd>${fmtDuration(l.delaySecondsFromNewest)}</dd>
       </dl>
       ${renderLowLatency(lowLatency)}
     </section>`;
@@ -297,26 +307,26 @@ function renderBitrate(b) {
       <tr>
         <td>${fmtDateTime(s.programDateTime)}</td>
         <td>${s.ok ? fmtInt(s.bytes) : '–'}</td>
-        <td>${s.ok ? fmtNumber(s.bitrateKbps) : 'misslyckades'}</td>
+        <td>${s.ok ? fmtNumber(s.bitrateKbps) : esc(t('bitrate.failed'))}</td>
       </tr>`
     )
     .join('');
   return `
     <section id="sec-bitrate">
-      ${withHint('h2', 'Uppmätt bitrate', 'bitrate')}
+      ${withHint('h2', t('bitrate.heading'), 'bitrate')}
       <dl>
-        ${withHint('dt', 'Snitt (uppmätt)', 'snitt-uppmatt')}<dd>${b.averageMeasuredBitrateKbps ? fmtNumber(b.averageMeasuredBitrateKbps) + ' kbit/s' : '–'}</dd>
-        ${withHint('dt', 'Deklarerad bandbredd', 'deklarerad-bandbredd')}<dd>${b.declaredBandwidthKbps ? fmtNumber(b.declaredBandwidthKbps) + ' kbit/s' : 'okänd (ingen deklarerad bandbredd)'}</dd>
+        ${withHint('dt', t('bitrate.average'), 'snitt-uppmatt')}<dd>${b.averageMeasuredBitrateKbps ? fmtNumber(b.averageMeasuredBitrateKbps) + ' kbit/s' : '–'}</dd>
+        ${withHint('dt', t('bitrate.declared'), 'deklarerad-bandbredd')}<dd>${b.declaredBandwidthKbps ? fmtNumber(b.declaredBandwidthKbps) + ' kbit/s' : esc(t('bitrate.declaredUnknown'))}</dd>
       </dl>
       <table>
-        <thead><tr>${withHint('th', 'Tidsstämpel', 'tidsstampel')}${withHint('th', 'Bytes', 'bytes')}${withHint('th', 'Bitrate (kbit/s)', 'bitrate-kolumn')}</tr></thead>
+        <thead><tr>${withHint('th', t('bitrate.timestampHeader'), 'tidsstampel')}${withHint('th', t('bitrate.bytesHeader'), 'bytes')}${withHint('th', t('bitrate.bitrateHeader'), 'bitrate-kolumn')}</tr></thead>
         <tbody>${rows}</tbody>
       </table>
     </section>`;
 }
 
 function renderId3Placeholder() {
-  return `<section id="sec-id3">${withHint('h2', 'Nu spelas (ID3)', 'id3')}<p class="note">Hämtar…</p></section>`;
+  return `<section id="sec-id3">${withHint('h2', t('id3.heading'), 'id3')}<p class="note">${esc(t('id3.loading'))}</p></section>`;
 }
 
 // Warnings from /api/sample. "No metadata found" is a claim about the stream;
@@ -325,17 +335,19 @@ function renderId3Placeholder() {
 function renderSampleWarnings(sample) {
   const warnings = sample?.warnings || [];
   if (!warnings.length) return '';
-  return `<p class="note error">${warnings.map((w) => esc(w.message)).join('<br />')}</p>`;
+  return `<p class="note error">${warnings.map((w) => esc(errorText(w))).join('<br />')}</p>`;
 }
 
 function renderId3(sample, error) {
+  const head = withHint('h2', t('id3.heading'), 'id3');
   if (error) {
-    return `${withHint('h2', 'Nu spelas (ID3)', 'id3')}<p class="error">${esc(error.message)}</p>`;
+    return `${head}<p class="error">${esc(errorText(error))}</p>`;
   }
   if (!sample.id3.available) {
-    return `${withHint('h2', 'Nu spelas (ID3)', 'id3')}${renderSampleWarnings(sample)}<p class="note">Ingen ID3-metadata hittades i den här strömmen (inspelning: ${fmtDuration(
-      sample.actualDurationSec
-    )}, uppmätt ${fmtNumber(sample.measuredBitrateKbps)} kbit/s).</p>`;
+    return `${head}${renderSampleWarnings(sample)}<p class="note">${esc(t('id3.noneFound', {
+      duration: fmtDuration(sample.actualDurationSec),
+      bitrate: fmtNumber(sample.measuredBitrateKbps),
+    }))}</p>`;
   }
   const rows = sample.id3.frames
     .map(
@@ -347,10 +359,10 @@ function renderId3(sample, error) {
     )
     .join('');
   return `
-    ${withHint('h2', 'Nu spelas (ID3)', 'id3')}
+    ${head}
     ${renderSampleWarnings(sample)}
     <table>
-      <thead><tr>${withHint('th', 'Tid i segment', 'tid-i-segment')}${withHint('th', 'Taggar', 'taggar')}</tr></thead>
+      <thead><tr>${withHint('th', t('id3.timeInSegmentHeader'), 'tid-i-segment')}${withHint('th', t('id3.tagsHeader'), 'taggar')}</tr></thead>
       <tbody>${rows}</tbody>
     </table>`;
 }
@@ -361,39 +373,43 @@ function renderId3(sample, error) {
 function renderNetworkPath(np) {
   const headerRows = Object.entries(np.headers || {});
   const headerTable = headerRows.length
-    ? `<table><thead><tr><th>Header</th><th>Värde</th></tr></thead><tbody>${headerRows
+    ? `<table><thead><tr><th>${esc(t('networkPath.headerTableName'))}</th><th>${esc(t('networkPath.headerTableValue'))}</th></tr></thead><tbody>${headerRows
         .map(([k, v]) => `<tr><td>${esc(k)}</td><td>${esc(v)}</td></tr>`)
         .join('')}</tbody></table>`
-    : '<p class="note">Inga headrar som matchar routing-mönstren (x-cache*, x-served*, x-edge*, via, x-amz-cf*, cf-*, x-akamai*) hittades.</p>';
+    : `<p class="note">${esc(t('networkPath.noHeaders'))}</p>`;
 
   const dnsInfo = np.dns || {};
   const dnsResult = dnsInfo.error
-    ? `Kunde inte slås upp: ${esc(dnsInfo.error)}`
+    ? t('networkPath.dnsLookupFailed', { error: esc(dnsInfo.error) })
     : dnsInfo.addresses?.length
     ? esc(dnsInfo.addresses.join(', '))
-    : 'Inga adresser hittades';
+    : esc(t('networkPath.dnsNoAddresses'));
 
-  const ipGeoResult =
+  // The IP-geo row itself (not just its value) is left out entirely when the server
+  // has it turned off (ENABLE_IP_GEO unset) - a permanently "disabled" row is clutter,
+  // not information, and the header-based geo hint above already covers the same
+  // "roughly where did this answer come from" question without the ~110 MB database.
+  const ipGeoRow =
     dnsInfo.ipGeoEnabled === false
-      ? 'Avstängd — IP-databasen kostar ~110 MB minne. Sätt ENABLE_IP_GEO=1 på servern för att slå på den.'
-      : (dnsInfo.ipGeo || []).some((g) => g)
-      ? dnsInfo.ipGeo
-          .map((g, i) => `${esc(dnsInfo.addresses[i])}: ${g ? `${esc(g.city || '–')}, ${esc(g.country || '–')}` : 'okänd'}`)
-          .join('; ')
-      : 'Hittades inte';
+      ? ''
+      : `${withHint('dt', t('networkPath.ipGeo'), 'ip-geo')}<dd>${
+          (dnsInfo.ipGeo || []).some((g) => g)
+            ? dnsInfo.ipGeo
+                .map((g, i) => `${esc(dnsInfo.addresses[i])}: ${g ? `${esc(g.city || '–')}, ${esc(g.country || '–')}` : esc(t('networkPath.ipGeoUnknown'))}`)
+                .join('; ')
+            : esc(t('networkPath.ipGeoNotFound'))
+        }</dd>`;
 
   return `
     <section id="sec-network">
-      ${withHint('h2', 'Nätverksväg', 'natverksvag')}
+      ${withHint('h2', t('networkPath.heading'), 'natverksvag')}
       ${headerTable}
       <dl>
-        ${withHint('dt', 'Möjlig geografisk ledtråd', 'geo-hint')}<dd>${
-          np.geoHint
-            ? `${esc(np.geoHint.raw)} (gissning baserad på ett vanligt nodnamnsmönster, inte bekräftad)`
-            : 'Hittades inte'
+        ${withHint('dt', t('networkPath.geoHint'), 'geo-hint')}<dd>${
+          np.geoHint ? t('networkPath.geoHintFound', { raw: esc(np.geoHint.raw) }) : esc(t('networkPath.ipGeoNotFound'))
         }</dd>
-        ${withHint('dt', 'DNS-uppslagning', 'dns-lookup')}<dd>${esc(dnsInfo.hostname) || '–'} → ${dnsResult}</dd>
-        ${withHint('dt', 'Geografisk uppskattning (IP-databas)', 'ip-geo')}<dd>${ipGeoResult} </dd>
+        ${withHint('dt', t('networkPath.dnsLookup'), 'dns-lookup')}<dd>${esc(dnsInfo.hostname) || '–'} → ${dnsResult}</dd>
+        ${ipGeoRow}
       </dl>
     </section>`;
 }
@@ -409,9 +425,7 @@ function renderRawManifest(label, url, raw) {
   const hidden = lines.length - MAX_MANIFEST_LINES_SHOWN;
   const more =
     hidden > 0
-      ? `<p class="note">Visar de första ${fmtInt(MAX_MANIFEST_LINES_SHOWN)} raderna av ${fmtInt(
-          lines.length
-        )}. Öppna URL:en ovan för att se hela manifestet.</p>`
+      ? `<p class="note">${t('manifest.truncatedNote', { shown: fmtInt(MAX_MANIFEST_LINES_SHOWN), total: fmtInt(lines.length) })}</p>`
       : '';
   return `<h3>${esc(label)} (${esc(url)})</h3><pre>${esc(shown)}</pre>${more}`;
 }
@@ -419,17 +433,17 @@ function renderRawManifest(label, url, raw) {
 function renderManifests(m) {
   return `
     <section id="sec-manifest">
-      ${withHint('h2', 'Råmanifest', 'manifest')}
-      ${m.master ? renderRawManifest('Master', m.master.url, m.master.raw) : ''}
-      ${renderRawManifest('Media', m.media.url, m.media.raw)}
+      ${withHint('h2', t('manifest.headingHls'), 'manifest')}
+      ${m.master ? renderRawManifest(t('manifest.master'), m.master.url, m.master.raw) : ''}
+      ${renderRawManifest(t('manifest.media'), m.media.url, m.media.raw)}
     </section>`;
 }
 
 function renderDashManifest(m) {
   return `
     <section id="sec-manifest">
-      ${withHint('h2', 'Råmanifest (MPD)', 'mpd')}
-      ${renderRawManifest('MPD', m.mpd.url, m.mpd.raw)}
+      ${withHint('h2', t('manifest.headingDash'), 'mpd')}
+      ${renderRawManifest(t('manifest.mpd'), m.mpd.url, m.mpd.raw)}
     </section>`;
 }
 
@@ -447,13 +461,9 @@ function renderDashManifest(m) {
 function dashRepresentationNotes(reps) {
   return [
     reps.multiPeriod
-      ? `MPD:n har ${fmtInt(reps.periodCount)} perioder. Endast period ${reps.periodIndex + 1} (id "${
-          reps.periodId
-        }") analyseras - övriga perioders data blandas inte in.`
+      ? t('dashRepr.multiPeriodNote', { periodCount: fmtInt(reps.periodCount), period: reps.periodIndex + 1, periodId: reps.periodId })
       : null,
-    reps.hasXlink
-      ? 'Den analyserade perioden refererar en extern (xlink) period. Den hämtas inte och ingår inte i analysen.'
-      : null,
+    reps.hasXlink ? t('dashRepr.xlinkNote') : null,
   ].filter(Boolean);
 }
 
@@ -482,11 +492,11 @@ function renderDashRepresentations(reps) {
 
   return `
     <section id="sec-representations">
-      ${withHint('h2', 'Representationer', 'representation')}
-      <p class="note">Analyserad: <span class="mono">${esc(reps.chosenId || '–')}</span> (första ljudrepresentationen i period ${reps.periodIndex + 1}). Till skillnad från HLS-varianter går DASH-rader inte att klicka för omanalys - hela MPD:n är redan hämtad.</p>
+      ${withHint('h2', t('dashRepr.heading'), 'representation')}
+      <p class="note">${t('dashRepr.analyzed', { id: esc(reps.chosenId || '–'), period: reps.periodIndex + 1 })}</p>
       ${notes}
       <table>
-        <thead><tr>${withHint('th', 'Typ (språk)', 'adaptationset')}${withHint('th', 'ID', 'representation')}${withHint('th', 'Bandbredd (kbit/s)', 'variant-bandbredd')}${withHint('th', 'Codecs', 'codecs')}${withHint('th', 'Upplösning / samplerate', 'upplosning')}</tr></thead>
+        <thead><tr>${withHint('th', t('dashRepr.typeHeader'), 'adaptationset')}${withHint('th', t('dashRepr.idHeader'), 'representation')}${withHint('th', t('dashRepr.bandwidthHeader'), 'variant-bandbredd')}${withHint('th', t('dashRepr.codecsHeader'), 'codecs')}${withHint('th', t('dashRepr.resolutionHeader'), 'upplosning')}</tr></thead>
         <tbody>${rows}</tbody>
       </table>
     </section>`;
@@ -501,49 +511,51 @@ function renderDashSegments(s) {
 
   return `
     <section id="sec-segments">
-      ${withHint('h2', 'Segment och buffert', 'segment')}
+      ${withHint('h2', t('segments.heading'), 'segment')}
       <dl>
-        ${withHint('dt', 'Presentationstyp', 'presentationtype')}<dd>${s.isLive ? 'Live (dynamic)' : 'VOD (static)'}</dd>
-        ${withHint('dt', 'Segmentadressering', 'segmenttemplate')}<dd>${esc(dashAddressingLabel(s.segmentAddressing))}</dd>
-        ${withHint('dt', 'Segmentlängd', 'snittlangd')}<dd>${fmtDuration(s.segmentDurationSec)}</dd>
-        ${withHint('dt', 'Antal segment', 'antal-segment')}<dd>${s.segmentCount != null ? fmtInt(s.segmentCount) : '–'}${s.isLive ? ' (uppskattat)' : ''}</dd>
-        ${withHint('dt', 'Fönster / DVR-djup', 'timeshiftbufferdepth')}<dd>${fmtDuration(s.windowSeconds)}</dd>
-        ${withHint('dt', 'minBufferTime', 'minbuffertime')}<dd>${fmtDuration(s.minBufferTimeSec)}</dd>
-        ${withHint('dt', 'minimumUpdatePeriod', 'minimumupdateperiod')}<dd>${s.minimumUpdatePeriodSec != null ? fmtDuration(s.minimumUpdatePeriodSec) : '–'}</dd>
-        ${withHint('dt', 'mediaPresentationDuration', 'mediapresentationduration')}<dd>${fmtDuration(s.mediaPresentationDurationSec)}</dd>
-        ${withHint('dt', 'Kryptering', 'contentprotection')}<dd>${cp ? cp : 'Av'}</dd>
-        ${withHint('dt', 'Segmentformat', 'fmp4')}<dd>${s.fmp4 ? 'Fragmenterad MP4 (fMP4)' : 'Inget separat init-segment'}</dd>
-        ${withHint('dt', 'Init-segment', 'init-segment')}<dd>${s.initUri ? `<span class="mono">${esc(s.initUri)}</span>` : '–'}</dd>
+        ${withHint('dt', t('dashSegments.presentationType'), 'presentationtype')}<dd>${s.isLive ? t('dashSegments.live') : t('dashSegments.vod')}</dd>
+        ${withHint('dt', t('dashSegments.addressing'), 'segmenttemplate')}<dd>${esc(dashAddressingLabel(s.segmentAddressing))}</dd>
+        ${withHint('dt', t('dashSegments.length'), 'snittlangd')}<dd>${fmtDuration(s.segmentDurationSec)}</dd>
+        ${withHint('dt', t('dashSegments.count'), 'antal-segment')}<dd>${s.segmentCount != null ? fmtInt(s.segmentCount) : '–'}${s.isLive ? esc(t('dashSegments.estimated')) : ''}</dd>
+        ${withHint('dt', t('dashSegments.window'), 'timeshiftbufferdepth')}<dd>${fmtDuration(s.windowSeconds)}</dd>
+        ${withHint('dt', t('dashSegments.minBufferTime'), 'minbuffertime')}<dd>${fmtDuration(s.minBufferTimeSec)}</dd>
+        ${withHint('dt', t('dashSegments.minimumUpdatePeriod'), 'minimumupdateperiod')}<dd>${s.minimumUpdatePeriodSec != null ? fmtDuration(s.minimumUpdatePeriodSec) : '–'}</dd>
+        ${withHint('dt', t('dashSegments.mediaPresentationDuration'), 'mediapresentationduration')}<dd>${fmtDuration(s.mediaPresentationDurationSec)}</dd>
+        ${withHint('dt', t('dashSegments.encryption'), 'contentprotection')}<dd>${cp ? cp : t('dashSegments.off')}</dd>
+        ${withHint('dt', t('dashSegments.format'), 'fmp4')}<dd>${s.fmp4 ? t('dashSegments.fmp4') : t('dashSegments.noInit')}</dd>
+        ${withHint('dt', t('dashSegments.initSegment'), 'init-segment')}<dd>${s.initUri ? `<span class="mono">${esc(s.initUri)}</span>` : '–'}</dd>
       </dl>
     </section>`;
 }
 
 function renderDashLatency(l) {
   if (!l.available) {
+    const reasonKey = `dash.noLatencyReasons.${l.reason}`;
+    const reason = t(reasonKey) !== reasonKey ? t(reasonKey) : t('dashLatency.unavailable');
     return `
       <section id="sec-latency">
-        ${withHint('h2', 'Latens', 'latens')}
-        <p class="note">${esc(DASH_NO_LATENCY_REASONS[l.reason] || 'Latens kan inte beräknas för den här strömmen.')}</p>
+        ${withHint('h2', t('latency.heading'), 'latens')}
+        <p class="note">${esc(reason)}</p>
       </section>`;
   }
-  const methodLabel = l.method === 'declared' ? 'Deklarerad i manifestet' : 'Uppskattad från segmentlängd';
+  const methodLabel = l.method === 'declared' ? t('dashLatency.methodDeclared') : t('dashLatency.methodEstimated');
   const ageLine = l.manifestAgeSec != null
     ? fmtDuration(l.manifestAgeSec)
     : l.epochAnchored
-    ? 'Ej tillgänglig (publishTime är epoch-förankrad - simulerad live)'
+    ? t('dashLatency.manifestAgeUnavailable')
     : '–';
   return `
     <section id="sec-latency">
-      ${withHint('h2', 'Latens', 'latens')}
+      ${withHint('h2', t('latency.heading'), 'latens')}
       <dl>
-        ${withHint('dt', 'Beräkningsmetod', 'latens-metod')}<dd>${methodLabel}</dd>
-        ${withHint('dt', 'availabilityStartTime', 'availabilitystarttime')}<dd>${fmtDateTime(l.availabilityStartTime)}${l.epochAnchored ? ' (epoch-förankrad)' : ''}</dd>
-        ${withHint('dt', 'publishTime', 'publishtime')}<dd>${fmtDateTime(l.publishTime)}</dd>
-        ${withHint('dt', 'Manifestets ålder', 'manifest-age')}<dd>${ageLine}</dd>
-        ${withHint('dt', 'suggestedPresentationDelay', 'suggestedpresentationdelay')}<dd>${l.suggestedPresentationDelaySec != null ? fmtDuration(l.suggestedPresentationDelaySec) : 'Hittades inte'}</dd>
-        ${withHint('dt', 'Uppskattad live-fördröjning', 'dash-est-delay')}<dd>${fmtDuration(l.estimatedLiveDelaySec)}${l.method === 'estimated' ? ' (grov)' : ''}</dd>
-        ${withHint('dt', 'minimumUpdatePeriod', 'minimumupdateperiod')}<dd>${l.minimumUpdatePeriodSec != null ? fmtDuration(l.minimumUpdatePeriodSec) : '–'}</dd>
-        ${withHint('dt', 'timeShiftBufferDepth', 'timeshiftbufferdepth')}<dd>${fmtDuration(l.timeShiftBufferDepthSec)}</dd>
+        ${withHint('dt', t('dashLatency.method'), 'latens-metod')}<dd>${esc(methodLabel)}</dd>
+        ${withHint('dt', t('dashLatency.availabilityStartTime'), 'availabilitystarttime')}<dd>${fmtDateTime(l.availabilityStartTime)}${l.epochAnchored ? esc(t('dashLatency.epochAnchored')) : ''}</dd>
+        ${withHint('dt', t('dashLatency.publishTime'), 'publishtime')}<dd>${fmtDateTime(l.publishTime)}</dd>
+        ${withHint('dt', t('dashLatency.manifestAge'), 'manifest-age')}<dd>${esc(ageLine)}</dd>
+        ${withHint('dt', t('dashLatency.suggestedDelay'), 'suggestedpresentationdelay')}<dd>${l.suggestedPresentationDelaySec != null ? fmtDuration(l.suggestedPresentationDelaySec) : esc(t('common.notFound'))}</dd>
+        ${withHint('dt', t('dashLatency.estimatedDelay'), 'dash-est-delay')}<dd>${fmtDuration(l.estimatedLiveDelaySec)}${l.method === 'estimated' ? esc(t('dashLatency.estimatedSuffix')) : ''}</dd>
+        ${withHint('dt', t('dashLatency.minimumUpdatePeriod'), 'minimumupdateperiod')}<dd>${l.minimumUpdatePeriodSec != null ? fmtDuration(l.minimumUpdatePeriodSec) : '–'}</dd>
+        ${withHint('dt', t('dashLatency.timeShiftBufferDepth'), 'timeshiftbufferdepth')}<dd>${fmtDuration(l.timeShiftBufferDepthSec)}</dd>
       </dl>
     </section>`;
 }
@@ -560,16 +572,16 @@ function renderIcecastStation(st) {
   if (!st) {
     return `
       <section id="sec-station">
-        ${withHint('h2', 'Station', 'icecast')}
-        <p class="note">Ingen stationsmetadata kunde hämtas (se varningar ovan).</p>
+        ${withHint('h2', t('icecastStation.heading'), 'icecast')}
+        <p class="note">${esc(t('icecastStation.unavailable'))}</p>
       </section>`;
   }
 
   const nowPlaying = st.icyMetadataSupported
     ? st.nowPlaying
       ? esc(st.nowPlaying)
-      : `<span class="note">Metadata är påslaget (var ${fmtInt(st.metaIntBytes)} byte) men inget titelblock hann skickas innan provet var klart.</span>`
-    : '<span class="note">Strömmen skickar ingen låttitel i ljudflödet (icy-metaint saknas). Vanligt - inte ett fel.</span>';
+      : `<span class="note">${esc(t('icecastStation.metadataPending', { metaInt: fmtInt(st.metaIntBytes) }))}</span>`
+    : `<span class="note">${esc(t('icecastStation.metadataOff'))}</span>`;
 
   // Not linkified unless it is a real http(s) URL - see safeHttpUrl(). A station
   // that sends something else still gets its value shown, just as inert text.
@@ -580,37 +592,37 @@ function renderIcecastStation(st) {
 
   return `
     <section id="sec-station">
-      ${withHint('h2', 'Station', 'icecast')}
+      ${withHint('h2', t('icecastStation.heading'), 'icecast')}
       <dl>
-        ${withHint('dt', 'Namn', 'station-name')}<dd>${esc(st.name) || '–'}</dd>
-        ${withHint('dt', 'Nu spelas', 'now-playing-icy')}<dd>${nowPlaying}</dd>
-        ${withHint('dt', 'Genre', 'station-genre')}<dd>${esc(st.genre) || '–'}</dd>
-        ${withHint('dt', 'Beskrivning', 'station-description')}<dd>${esc(st.description) || '–'}</dd>
-        ${withHint('dt', 'Hemsida', 'station-homepage')}<dd>${homepage}</dd>
-        ${withHint('dt', 'Deklarerad bitrate', 'declared-bitrate-icy')}<dd>${st.declaredBitrateKbps ? fmtInt(st.declaredBitrateKbps) + ' kbit/s' : '–'}</dd>
-        ${withHint('dt', 'Deklarerad samplingsfrekvens', 'declared-samplerate-icy')}<dd>${st.declaredSampleRateHz ? fmtInt(st.declaredSampleRateHz) + ' Hz' : '–'}</dd>
+        ${withHint('dt', t('icecastStation.name'), 'station-name')}<dd>${esc(st.name) || '–'}</dd>
+        ${withHint('dt', t('icecastStation.nowPlaying'), 'now-playing-icy')}<dd>${nowPlaying}</dd>
+        ${withHint('dt', t('icecastStation.genre'), 'station-genre')}<dd>${esc(st.genre) || '–'}</dd>
+        ${withHint('dt', t('icecastStation.description'), 'station-description')}<dd>${esc(st.description) || '–'}</dd>
+        ${withHint('dt', t('icecastStation.homepage'), 'station-homepage')}<dd>${homepage}</dd>
+        ${withHint('dt', t('icecastStation.declaredBitrate'), 'declared-bitrate-icy')}<dd>${st.declaredBitrateKbps ? fmtInt(st.declaredBitrateKbps) + ' kbit/s' : '–'}</dd>
+        ${withHint('dt', t('icecastStation.declaredSampleRate'), 'declared-samplerate-icy')}<dd>${st.declaredSampleRateHz ? fmtInt(st.declaredSampleRateHz) + ' Hz' : '–'}</dd>
         ${st.audioInfo ? `${withHint('dt', 'ice-audio-info', 'declared-samplerate-icy')}<dd>${esc(st.audioInfo)}</dd>` : ''}
-        ${withHint('dt', 'Serverprogramvara', 'server-software')}<dd>${esc(st.serverSoftware) || '–'}</dd>
-        ${withHint('dt', 'Publikt listad', 'icy-public')}<dd>${st.isPublic ? 'Ja (icy-pub: 1)' : 'Nej'}</dd>
-        ${withHint('dt', 'In-stream-metadata', 'icy-metaint')}<dd>${st.icyMetadataSupported ? `Ja, var ${fmtInt(st.metaIntBytes)} byte` : 'Nej'}</dd>
+        ${withHint('dt', t('icecastStation.serverSoftware'), 'server-software')}<dd>${esc(st.serverSoftware) || '–'}</dd>
+        ${withHint('dt', t('icecastStation.publiclyListed'), 'icy-public')}<dd>${st.isPublic ? esc(t('icecastStation.publiclyListedYes')) : esc(t('common.no'))}</dd>
+        ${withHint('dt', t('icecastStation.inStreamMetadata'), 'icy-metaint')}<dd>${st.icyMetadataSupported ? esc(t('icecastStation.inStreamMetadataYes', { metaInt: fmtInt(st.metaIntBytes) })) : esc(t('common.no'))}</dd>
       </dl>
-      ${st.rawMetaBlock ? `<p class="note">Rått metadatablock:</p><pre>${esc(st.rawMetaBlock)}</pre>` : ''}
+      ${st.rawMetaBlock ? `<p class="note">${esc(t('icecastStation.rawMetaBlock'))}</p><pre>${esc(st.rawMetaBlock)}</pre>` : ''}
     </section>`;
 }
 
 function renderIcecastSamplePlaceholder() {
-  return `<section id="sec-icecast-sample">${withHint('h2', 'Ljudprov', 'icecast-sample')}<p class="note">Spelar in…</p></section>`;
+  return `<section id="sec-icecast-sample">${withHint('h2', t('icecastSample.heading'), 'icecast-sample')}<p class="note">${esc(t('icecastSample.recording'))}</p></section>`;
 }
 
 function renderIcecastSample(sample, error) {
-  const head = withHint('h2', 'Ljudprov', 'icecast-sample');
-  if (error) return `${head}<p class="error">${esc(error.message)}</p>`;
-  if (!sample) return `${head}<p class="note">Hämtades inte (analysen avbröts eller väntar fortfarande).</p>`;
+  const head = withHint('h2', t('icecastSample.heading'), 'icecast-sample');
+  if (error) return `${head}<p class="error">${esc(errorText(error))}</p>`;
+  if (!sample) return `${head}<p class="note">${esc(t('icecastSample.notFetched'))}</p>`;
 
   const s = sample.streams || {};
   const id3Block = sample.id3 && sample.id3.available
-    ? `<p class="note">ID3-ramar i flödet (ovanligt för Icecast):</p>
-       <table><thead><tr>${withHint('th', 'Tid i prov', 'tid-i-segment')}${withHint('th', 'Taggar', 'taggar')}</tr></thead>
+    ? `<p class="note">${esc(t('icecastSample.id3Intro'))}</p>
+       <table><thead><tr>${withHint('th', t('icecastSample.timeInSampleHeader'), 'tid-i-segment')}${withHint('th', t('icecastSample.tagsHeader'), 'taggar')}</tr></thead>
        <tbody>${sample.id3.frames
          .map((f) => `<tr><td>${fmtDuration(f.ptsTime)}</td><td>${esc(JSON.stringify(f.tags))}</td></tr>`)
          .join('')}</tbody></table>`
@@ -618,20 +630,20 @@ function renderIcecastSample(sample, error) {
 
   const burst =
     typeof sample.connectBurstSec !== 'number' || sample.connectBurstSec < 1
-      ? 'ingen märkbar (strömmen levererades i realtid)'
-      : `${sample.burstIsLowerBound ? 'minst ' : '≈ '}${fmtDuration(sample.connectBurstSec)}${
-          sample.burstIsLowerBound ? ' (hela provet dränerades ur bufferten)' : ''
+      ? t('icecastSample.burstNone')
+      : `${t(sample.burstIsLowerBound ? 'icecastSample.burstAtLeast' : 'icecastSample.burstApprox', { seconds: fmtDuration(sample.connectBurstSec) })}${
+          sample.burstIsLowerBound ? t('icecastSample.burstAtLeastSuffix') : ''
         }`;
 
   return `
     ${head}
     ${renderSampleWarnings(sample)}
     <dl>
-      ${withHint('dt', 'Uppmätt bitrate', 'snitt-uppmatt')}<dd>${sample.measuredBitrateKbps ? fmtNumber(sample.measuredBitrateKbps) + ' kbit/s' : '–'}</dd>
-      ${withHint('dt', 'Inspelad längd', 'inspelad-langd')}<dd>${fmtDuration(sample.actualDurationSec)}</dd>
-      ${withHint('dt', 'Serverbuffert vid anslutning', 'connect-burst')}<dd>${burst}</dd>
-      ${withHint('dt', 'Provets storlek', 'bytes')}<dd>${sample.fileSizeBytes ? fmtInt(sample.fileSizeBytes) + ' byte' : '–'}</dd>
-      ${withHint('dt', 'Container', 'container')}<dd>${esc(s.container) || '–'}</dd>
+      ${withHint('dt', t('icecastSample.average'), 'snitt-uppmatt')}<dd>${sample.measuredBitrateKbps ? fmtNumber(sample.measuredBitrateKbps) + ' kbit/s' : '–'}</dd>
+      ${withHint('dt', t('icecastSample.recordedLength'), 'inspelad-langd')}<dd>${fmtDuration(sample.actualDurationSec)}</dd>
+      ${withHint('dt', t('icecastSample.connectBurst'), 'connect-burst')}<dd>${esc(burst)}</dd>
+      ${withHint('dt', t('icecastSample.sampleSize'), 'bytes')}<dd>${sample.fileSizeBytes ? fmtInt(sample.fileSizeBytes) + ' byte' : '–'}</dd>
+      ${withHint('dt', t('icecastSample.container'), 'container')}<dd>${esc(s.container) || '–'}</dd>
     </dl>
     ${id3Block}`;
 }
@@ -643,17 +655,17 @@ function renderIcecastSample(sample, error) {
 function renderAnalysisControls() {
   return `
     <div id="analysis-controls">
-      <button type="button" id="copy-btn" title="Kopiera all analysdata (utom råmanifestet) som text, t.ex. för att klistra in i en AI-tjänst" disabled>Kopiera analys</button>
+      <button type="button" id="copy-btn" title="${esc(t('controls.copyBtnTitle'))}" disabled>${esc(t('controls.copyBtn'))}</button>
     </div>`;
 }
 
 function renderWarnings(errors) {
   const entries = Object.entries(errors || {});
   if (!entries.length) return '';
-  const items = entries.map(([key, e]) => `<li><strong>${esc(key)}:</strong> ${esc(e.message)}</li>`).join('');
+  const items = entries.map(([key, e]) => `<li><strong>${esc(key)}:</strong> ${esc(errorText(e))}</li>`).join('');
   return `
     <section id="sec-warnings">
-      <h2>Varningar (delvis resultat)</h2>
+      <h2>${esc(t('warnings.heading'))}</h2>
       <ul>${items}</ul>
     </section>`;
 }
@@ -661,22 +673,22 @@ function renderWarnings(errors) {
 function renderFatalError(err) {
   const d = err.details || {};
   let extra = '';
-  if (d.status) extra += `<dt>HTTP-status</dt><dd>${d.status} ${esc(d.statusText || '')}</dd>`;
-  if (d.bodySnippet) extra += `<dt>Svarskropp (utdrag)</dt><dd><pre>${esc(d.bodySnippet)}</pre></dd>`;
-  if (d.geoblockGuess) extra += `<dt>Trolig orsak</dt><dd>Geoblockering (403 med tomt svar)</dd>`;
-  if (d.preview) extra += `<dt>Vad som kom tillbaka</dt><dd><pre>${esc(d.preview)}</pre></dd>`;
+  if (d.status) extra += `<dt>${esc(t('error.httpStatus'))}</dt><dd>${d.status} ${esc(d.statusText || '')}</dd>`;
+  if (d.bodySnippet) extra += `<dt>${esc(t('error.responseBody'))}</dt><dd><pre>${esc(d.bodySnippet)}</pre></dd>`;
+  if (d.geoblockGuess) extra += `<dt>${esc(t('error.likelyCause'))}</dt><dd>${esc(t('error.likelyCauseGeoblock'))}</dd>`;
+  if (d.preview) extra += `<dt>${esc(t('error.whatCameBack'))}</dt><dd><pre>${esc(d.preview)}</pre></dd>`;
   if (d.installHelp) {
-    extra += `<dt>Installation</dt><dd>macOS: <code>${esc(d.installHelp.macOS)}</code><br />Linux: <code>${esc(
+    extra += `<dt>${esc(t('error.installation'))}</dt><dd>macOS: <code>${esc(d.installHelp.macOS)}</code><br />Linux: <code>${esc(
       d.installHelp.linux
     )}</code></dd>`;
   }
-  if (d.stderr) extra += `<dt>Felutdata</dt><dd><pre>${esc(d.stderr)}</pre></dd>`;
-  if (d.url) extra += `<dt>URL</dt><dd>${esc(d.url)}</dd>`;
+  if (d.stderr) extra += `<dt>${esc(t('error.stderr'))}</dt><dd><pre>${esc(d.stderr)}</pre></dd>`;
+  if (d.url) extra += `<dt>${esc(t('error.url'))}</dt><dd>${esc(d.url)}</dd>`;
 
   return `
     <section id="sec-error">
-      <h2 class="error">Fel</h2>
-      <p class="error">${esc(err.message)}</p>
+      <h2 class="error">${esc(t('error.heading'))}</h2>
+      <p class="error">${esc(errorText(err))}</p>
       <dl>${extra}</dl>
     </section>`;
 }
@@ -685,6 +697,8 @@ function renderFatalError(err) {
 // Text excerpt for the Copy button - the same data that's rendered on the
 // page, but as plain text without the raw manifest (which is just a long
 // segment list and adds nothing for an AI analysis of the stream's properties).
+// Section headings reuse the same catalog key as their card via .toUpperCase(),
+// so the wording can't drift between the two outputs.
 // ---------------------------------------------------------------------
 
 // Sections that are identical across all three stream kinds. They used to be
@@ -692,71 +706,73 @@ function renderFatalError(err) {
 // ended up with an Expires line the other two silently lacked.
 
 function addConnection(add, c) {
-  add('ANSLUTNING');
-  add(`Status: ${c.status} ${c.statusText}`);
-  add(`Begärd URL: ${c.requestedUrl}`);
-  add(`Slutlig URL: ${c.finalUrl}${c.redirected ? ' (omdirigerad)' : ''}`);
-  add(`Content-Type: ${c.contentType || '–'}`);
-  add(`Server: ${c.server || '–'}`);
-  add(`Cache-Control: ${c.cacheControl || '–'}`);
-  add(`Expires: ${c.expires || '–'}`);
-  add(`CORS: ${c.cors.present ? `Ja (${c.cors.allowOrigin})` : 'Nej - saknas'}`);
+  add(t('connection.heading').toUpperCase());
+  add(`${t('connection.status')}: ${c.status} ${c.statusText}`);
+  add(`${t('connection.requestedUrl')}: ${c.requestedUrl}`);
+  add(`${t('connection.finalUrl')}: ${c.finalUrl}${c.redirected ? ` (${t('connection.redirectedSuffix')})` : ''}`);
+  add(`${t('connection.contentType')}: ${c.contentType || '–'}`);
+  add(`${t('connection.server')}: ${c.server || '–'}`);
+  add(`${t('connection.cacheControl')}: ${c.cacheControl || '–'}`);
+  add(`${t('connection.expires')}: ${c.expires || '–'}`);
+  add(`${t('connection.cors')}: ${corsSummaryCopy(c)}`);
   const extraHeaders = Object.entries(c.extraHeaders || {});
   if (extraHeaders.length) {
-    add('x-/akamai-/icy-headers:');
+    add(`${t('connection.extraHeadersHeading')}:`);
     extraHeaders.forEach(([k, v]) => add(`  ${k}: ${v}`));
   }
   add('');
 }
 
 function addAudio(add, a) {
-  add('LJUDSPÅRET');
+  add(t('audio.heading').toUpperCase());
   if (a) copyFields(add, audioFields(a));
-  else add('Kunde inte hämtas (se varningar).');
+  else add(t('audio.unavailableCopy'));
   add('');
 }
 
 function addNetworkPath(add, np) {
-  add('NÄTVERKSVÄG');
+  add(t('networkPath.heading').toUpperCase());
   const npHeaders = Object.entries(np.headers || {});
   if (npHeaders.length) npHeaders.forEach(([k, v]) => add(`  ${k}: ${v}`));
-  else add('Inga matchande routing-headrar hittades.');
-  add(`Möjlig geografisk ledtråd: ${np.geoHint ? `${np.geoHint.raw} (ogranskad gissning)` : 'Hittades inte'}`);
+  else add(t('networkPath.noMatchingHeadersCopy'));
+  add(`${t('networkPath.geoHint')}: ${np.geoHint ? t('networkPath.geoHintFoundCopy', { raw: np.geoHint.raw }) : t('common.notFound')}`);
 
   const dnsInfo = np.dns || {};
   add(
-    `DNS-uppslagning (${dnsInfo.hostname || '–'}): ${
-      dnsInfo.error ? `kunde inte slås upp (${dnsInfo.error})` : dnsInfo.addresses?.join(', ') || 'inga adresser'
+    `${t('networkPath.dnsLabel', { hostname: dnsInfo.hostname || '–' })}: ${
+      dnsInfo.error ? t('networkPath.dnsLookupFailedCopy', { error: dnsInfo.error }) : dnsInfo.addresses?.join(', ') || t('networkPath.dnsNoAddressesCopy')
     }`
   );
 
-  const ipGeoList = dnsInfo.ipGeo || [];
-  const ipGeoText =
-    dnsInfo.ipGeoEnabled === false
-      ? 'avstängd (ENABLE_IP_GEO=1 för att slå på)'
-      : ipGeoList.some((g) => g)
-      ? ipGeoList.map((g, i) => `${dnsInfo.addresses[i]}: ${g ? `${g.city || '–'}, ${g.country || '–'}` : 'okänd'}`).join('; ')
-      : 'Hittades inte';
-  add(`Geografisk uppskattning (IP-databas, ogranskad): ${ipGeoText}`);
+  // Mirrors renderNetworkPath(): the row is left out entirely when IP geo is off on
+  // the server, not printed as a permanent "disabled" line.
+  if (dnsInfo.ipGeoEnabled !== false) {
+    const ipGeoList = dnsInfo.ipGeo || [];
+    const ipGeoText = ipGeoList.some((g) => g)
+      ? ipGeoList.map((g, i) => `${dnsInfo.addresses[i]}: ${g ? `${g.city || '–'}, ${g.country || '–'}` : t('networkPath.ipGeoUnknown')}`).join('; ')
+      : t('common.notFound');
+    add(`${t('networkPath.ipGeoCopy')}: ${ipGeoText}`);
+  }
   add('');
 }
 
 function addSample(add, sample, sampleError, heading) {
   add(heading);
   if (sampleError) {
-    add(`Kunde inte hämtas: ${sampleError.message}`);
+    add(t('id3.fetchFailed', { message: sampleError.message }));
     return;
   }
   if (!sample) {
-    add('Hämtades inte (analysen avbröts eller väntar fortfarande).');
+    add(t('id3.notFetched'));
     return;
   }
-  (sample.warnings || []).forEach((w) => add(`OBS: ${w.message}`));
+  (sample.warnings || []).forEach((w) => add(t('warnings.prefix', { message: errorText(w) })));
   if (!sample.id3?.available) {
     add(
-      `Ingen ID3-metadata hittades (inspelning: ${fmtDuration(sample.actualDurationSec)}, uppmätt ${fmtNumber(
-        sample.measuredBitrateKbps
-      )} kbit/s).`
+      t('id3.noneFoundCopy', {
+        duration: fmtDuration(sample.actualDurationSec),
+        bitrate: fmtNumber(sample.measuredBitrateKbps),
+      })
     );
     return;
   }
@@ -767,8 +783,8 @@ function addWarnings(add, errors) {
   const entries = Object.entries(errors || {});
   if (!entries.length) return;
   add('');
-  add('VARNINGAR (delvis resultat)');
-  entries.forEach(([key, e]) => add(`- ${key}: ${e.message}`));
+  add(t('warnings.heading').toUpperCase());
+  entries.forEach(([key, e]) => add(`- ${key}: ${errorText(e)}`));
 }
 
 function buildCopyText(data, sample, sampleError, variantsOverride) {
@@ -778,25 +794,29 @@ function buildCopyText(data, sample, sampleError, variantsOverride) {
   const lines = [];
   const add = (line = '') => lines.push(line);
 
-  add(`Strömanalys (HLS): ${data.requestedUrl}`);
+  add(t('flow.streamAnalysisHls', { url: data.requestedUrl }));
   if (currentMasterUrl && currentAnalyzedUrl && currentAnalyzedUrl !== currentMasterUrl) {
-    add(`(Variant vald från master: ${currentMasterUrl})`);
+    add(t('flow.variantFromMaster', { master: currentMasterUrl }));
   }
-  add(`Genererad: ${fmtDateTime(new Date().toISOString())}`);
+  add(t('flow.generated', { timestamp: fmtDateTime(new Date().toISOString()) }));
   add('');
 
   addConnection(add, data.connection);
 
   const v = variantsOverride || data.variants;
-  add('VARIANTER');
+  add(t('variants.heading').toUpperCase());
   if (v.singleVariantNote) {
-    add('Endast en variant tillgänglig (vanligt för radio) - URL:en pekar direkt på media-playlistan.');
+    add(t('variants.singleVariantNoteCopy'));
   } else {
     v.list.forEach((variant) => {
       add(
-        `- ${fmtInt(variant.bandwidth ? variant.bandwidth / 1000 : null)} kbit/s (snitt ${fmtInt(
-          variant.averageBandwidth ? variant.averageBandwidth / 1000 : null
-        )}), ${variant.codecs || 'okänd codec'}, ${variant.resolution || 'ingen video'}, ${variant.url}`
+        t('variants.copyLine', {
+          bandwidth: fmtInt(variant.bandwidth ? variant.bandwidth / 1000 : null),
+          average: fmtInt(variant.averageBandwidth ? variant.averageBandwidth / 1000 : null),
+          codecs: variant.codecs || t('variants.unknownCodec'),
+          resolution: variant.resolution || t('variants.noVideo'),
+          url: variant.url,
+        })
       );
     });
   }
@@ -805,31 +825,33 @@ function buildCopyText(data, sample, sampleError, variantsOverride) {
   addAudio(add, data.audio);
 
   const s = data.segments;
-  add('SEGMENT OCH BUFFERT');
-  add(`Version: ${s.version ?? '–'}`);
-  add(`Target duration: ${fmtDuration(s.targetDuration, 0)}`);
-  add(`Media sequence: ${fmtInt(s.mediaSequence)}`);
-  add(`Typ: ${s.isLive ? 'Live' : 'VOD'}${s.playlistType ? ' (' + s.playlistType + ')' : ''}`);
-  add(`Antal segment i fönstret: ${s.segmentCount}`);
-  add(`Fönsterlängd: ${fmtDuration(s.windowSeconds)}`);
-  add(`Snittlängd/segment: ${fmtDuration(s.avgSegmentDuration)}`);
-  add(`Kryptering: ${s.encrypted ? s.keyMethod : 'Av'}`);
-  add(`Segmentformat: ${s.fmp4 ? 'Fragmenterad MP4 (fMP4)' : 'Ej fragmenterat (MPEG-TS)'}`);
+  add(t('segments.heading').toUpperCase());
+  add(`${t('segments.version')}: ${s.version ?? '–'}`);
+  add(`${t('segments.targetDuration')}: ${fmtDuration(s.targetDuration, 0)}`);
+  add(`${t('segments.mediaSequence')}: ${fmtInt(s.mediaSequence)}`);
+  add(`${t('segments.type')}: ${s.isLive ? t('segments.live') : t('segments.vod')}${s.playlistType ? ' (' + s.playlistType + ')' : ''}`);
+  add(`${t('segments.segmentCount')}: ${s.segmentCount}`);
+  add(`${t('segments.windowLength')}: ${fmtDuration(s.windowSeconds)}`);
+  add(`${t('segments.avgLength')}: ${fmtDuration(s.avgSegmentDuration)}`);
+  add(`${t('segments.encryption')}: ${s.encrypted ? s.keyMethod : t('segments.off')}`);
+  add(`${t('segments.format')}: ${s.fmp4 ? t('segments.fmp4') : t('segments.mpegts')}`);
   add('');
 
   const cont = data.continuity;
-  add('KONTINUITET OCH STARTPUNKT');
-  add(`EXT-X-DISCONTINUITY-SEQUENCE: ${cont.discontinuitySequence !== null ? fmtInt(cont.discontinuitySequence) : 'Hittades inte (standard: 0)'}`);
+  add(t('continuity.heading').toUpperCase());
+  add(`${t('continuity.discontinuitySeqLabel')}: ${cont.discontinuitySequence !== null ? fmtInt(cont.discontinuitySequence) : t('continuity.discontinuitySeqNotFound')}`);
   add(
-    cont.discontinuityCount === 0
-      ? 'Discontinuities: inga i det aktuella fönstret.'
-      : `Discontinuities: ${cont.discontinuityCount} st - vid sekvensnummer ${cont.discontinuityPositions.join(', ')}.`
+    `${t('continuity.discontinuitiesLabel')}: ${
+      cont.discontinuityCount === 0
+        ? t('continuity.discontinuitiesNone')
+        : t('continuity.discontinuitiesCount', { count: cont.discontinuityCount, positions: cont.discontinuityPositions.join(', ') })
+    }`
   );
   add(
-    `EXT-X-START: ${
+    `${t('continuity.startLabel')}: ${
       cont.startInfo
         ? `TIME-OFFSET=${cont.startInfo.timeOffset} - ${startPointExplanation(cont.startInfo)}`
-        : 'Hittades inte.'
+        : t('continuity.startNotFound')
     }`
   );
   add('');
@@ -837,50 +859,50 @@ function buildCopyText(data, sample, sampleError, variantsOverride) {
   addNetworkPath(add, data.networkPath);
 
   const l = data.latency;
-  add('LATENS');
+  add(t('latency.heading').toUpperCase());
   if (l.available) {
-    const methodLabel = l.method === 'measured' ? 'Uppmätt direkt' : 'Beräknad från segmentsumma';
-    add(`Beräkningsmetod: ${methodLabel} (${l.taggedSegmentCount} taggade segment)`);
-    add(`Äldsta segmentets tidsstämpel: ${fmtDateTime(l.oldestProgramDateTime)}`);
-    add(`Nyaste segmentets tidsstämpel: ${fmtDateTime(l.newestProgramDateTime)}`);
-    add(`Fördröjning (från äldsta): ${fmtDuration(l.delaySecondsFromOldest)}`);
-    add(`Fördröjning (från nyaste, live-kant): ${fmtDuration(l.delaySecondsFromNewest)}`);
+    const methodLabel = l.method === 'measured' ? t('latency.methodMeasured') : t('latency.methodCalculated');
+    add(`${t('latency.method')}: ${methodLabel} (${tPlural('latency.taggedSegments', l.taggedSegmentCount)})`);
+    add(`${t('latency.oldestTs')}: ${fmtDateTime(l.oldestProgramDateTime)}`);
+    add(`${t('latency.newestTs')}: ${fmtDateTime(l.newestProgramDateTime)}`);
+    add(`${t('latency.delayFromOldest')}: ${fmtDuration(l.delaySecondsFromOldest)}`);
+    add(`${t('latency.delayFromNewest')}: ${fmtDuration(l.delaySecondsFromNewest)}`);
   } else {
-    add('Latens kan inte beräknas (ingen PROGRAM-DATE-TIME-tidsstämpel i manifestet).');
+    add(t('latency.unavailable'));
   }
   add('');
 
   const ll = data.lowLatency;
-  add('LOW-LATENCY HLS');
+  add(t('lowLatency.heading').toUpperCase());
   if (!ll.present) {
-    add('Inga LL-HLS-taggar hittades i manifestet.');
+    add(t('lowLatency.notPresent'));
     if (ll.contradiction) {
-      add(`Motsägelse: headern ${ll.contradiction.header}: ${ll.contradiction.value} antyder LL-HLS-stöd, men inga LL-HLS-taggar hittades.`);
+      add(t('lowLatency.contradictionCopy', { header: ll.contradiction.header, value: ll.contradiction.value }));
     }
   } else {
     const sc = ll.serverControl;
-    add(`CAN-BLOCK-RELOAD: ${sc ? (sc.canBlockReload ? 'Ja' : 'Nej') : 'Hittades inte'}`);
-    add(`HOLD-BACK: ${sc && sc.holdBack !== null ? fmtDuration(sc.holdBack) : 'Hittades inte'}`);
-    add(`PART-HOLD-BACK: ${sc && sc.partHoldBack !== null ? fmtDuration(sc.partHoldBack) : 'Hittades inte'}`);
-    add(`CAN-SKIP-UNTIL: ${sc && sc.canSkipUntil !== null ? fmtDuration(sc.canSkipUntil) : 'Hittades inte'}`);
-    add(`CAN-SKIP-DATERANGES: ${sc ? (sc.canSkipDateranges ? 'Ja' : 'Nej') : 'Hittades inte'}`);
-    add(`PART-TARGET: ${ll.partTargetDuration ? fmtDuration(ll.partTargetDuration) : 'Hittades inte'}`);
-    add(`Delsegment i senaste segmentet: ${ll.lastSegmentParts.length || 'Hittades inte'}`);
-    if (ll.trailingParts.length) add(`Delsegment för nästa segment: ${ll.trailingParts.length}`);
-    add(`PRELOAD-HINT: ${ll.preloadHint ? `${ll.preloadHint.type}: ${ll.preloadHint.uri}` : 'Hittades inte'}`);
-    add(`RENDITION-REPORT: ${ll.renditionReports.length ? ll.renditionReports.map((r) => `${r.uri} (msn ${r.lastMsn}, part ${r.lastPart})`).join('; ') : 'Hittades inte'}`);
+    add(`${t('lowLatency.canBlockReload')}: ${sc ? yesNo(sc.canBlockReload) : t('common.notFound')}`);
+    add(`${t('lowLatency.holdBack')}: ${sc && sc.holdBack !== null ? fmtDuration(sc.holdBack) : t('common.notFound')}`);
+    add(`${t('lowLatency.partHoldBack')}: ${sc && sc.partHoldBack !== null ? fmtDuration(sc.partHoldBack) : t('common.notFound')}`);
+    add(`${t('lowLatency.canSkipUntil')}: ${sc && sc.canSkipUntil !== null ? fmtDuration(sc.canSkipUntil) : t('common.notFound')}`);
+    add(`${t('lowLatency.canSkipDateranges')}: ${sc ? yesNo(sc.canSkipDateranges) : t('common.notFound')}`);
+    add(`${t('lowLatency.partTarget')}: ${ll.partTargetDuration ? fmtDuration(ll.partTargetDuration) : t('common.notFound')}`);
+    add(t('lowLatency.partsCopyLine', { countOrNotFound: ll.lastSegmentParts.length || t('common.notFound') }));
+    if (ll.trailingParts.length) add(t('lowLatency.nextPartsCopyLine', { count: ll.trailingParts.length }));
+    add(`${t('lowLatency.preloadHint')}: ${ll.preloadHint ? `${ll.preloadHint.type}: ${ll.preloadHint.uri}` : t('common.notFound')}`);
+    add(`${t('lowLatency.renditionReportIntro').replace(/:$/, '')}: ${ll.renditionReports.length ? ll.renditionReports.map((r) => t('lowLatency.renditionCopyEntry', { uri: r.uri, lastMsn: r.lastMsn, lastPart: r.lastPart })).join('; ') : t('common.notFound')}`);
   }
   add('');
 
   const b = data.bitrate;
-  add('UPPMÄTT BITRATE');
-  add(`Snitt (uppmätt): ${b.averageMeasuredBitrateKbps ? fmtNumber(b.averageMeasuredBitrateKbps) + ' kbit/s' : '–'}`);
-  add(`Deklarerad bandbredd: ${b.declaredBandwidthKbps ? fmtNumber(b.declaredBandwidthKbps) + ' kbit/s' : 'okänd'}`);
+  add(t('bitrate.heading').toUpperCase());
+  add(`${t('bitrate.average')}: ${b.averageMeasuredBitrateKbps ? fmtNumber(b.averageMeasuredBitrateKbps) + ' kbit/s' : '–'}`);
+  add(`${t('bitrate.declared')}: ${b.declaredBandwidthKbps ? fmtNumber(b.declaredBandwidthKbps) + ' kbit/s' : t('bitrate.declaredUnknownCopy')}`);
   if (b.samples?.length) {
-    add('Uppmätta segmentprov (tidsstämpel, storlek, bitrate):');
+    add(t('bitrate.samplesIntro'));
     b.samples.forEach((samp) => {
       add(
-        `  ${fmtDateTime(samp.programDateTime)}  ${samp.ok ? fmtInt(samp.bytes) + ' B' : 'misslyckades'}  ${
+        `  ${fmtDateTime(samp.programDateTime)}  ${samp.ok ? fmtInt(samp.bytes) + ' B' : t('bitrate.failed')}  ${
           samp.ok ? fmtNumber(samp.bitrateKbps) + ' kbit/s' : ''
         }`
       );
@@ -888,7 +910,7 @@ function buildCopyText(data, sample, sampleError, variantsOverride) {
   }
   add('');
 
-  addSample(add, sample, sampleError, 'NU SPELAS (ID3)');
+  addSample(add, sample, sampleError, t('id3.heading').toUpperCase());
   addWarnings(add, data.errors);
 
   return lines.join('\n');
@@ -900,23 +922,28 @@ function buildDashCopyText(data, sample, sampleError) {
   const lines = [];
   const add = (line = '') => lines.push(line);
 
-  add(`Strömanalys (DASH): ${data.requestedUrl}`);
-  add(`Genererad: ${fmtDateTime(new Date().toISOString())}`);
+  add(t('flow.streamAnalysisDash', { url: data.requestedUrl }));
+  add(t('flow.generated', { timestamp: fmtDateTime(new Date().toISOString()) }));
   add('');
 
   addConnection(add, data.connection);
   addNetworkPath(add, data.networkPath);
 
   const r = data.representations;
-  add('REPRESENTATIONER');
-  add(`Analyserad: ${r.chosenId || '–'} (period ${r.periodIndex + 1} av ${r.periodCount})`);
+  add(t('dashRepr.heading').toUpperCase());
+  add(t('dashRepr.analyzedCopy', { id: r.chosenId || '–', period: r.periodIndex + 1, periodCount: r.periodCount }));
   dashRepresentationNotes(r).forEach((note) => add(note));
   r.list.forEach((rep) => {
     const size = rep.width && rep.height ? `${rep.width}×${rep.height}` : rep.audioSamplingRate ? `${rep.audioSamplingRate} Hz` : '–';
     add(
-      `- [${rep.contentType || '?'}${rep.lang ? ' ' + rep.lang : ''}] ${rep.id || '?'}${rep.chosen ? ' (vald)' : ''}: ${fmtInt(
-        rep.bandwidthKbps
-      )} kbit/s, ${rep.codecs || 'okänd codec'}, ${size}`
+      t('dashRepr.copyLine', {
+        type: `${rep.contentType || '?'}${rep.lang ? ' ' + rep.lang : ''}`,
+        id: rep.id || '?',
+        chosenSuffix: rep.chosen ? t('dashRepr.chosenSuffix') : '',
+        bandwidth: fmtInt(rep.bandwidthKbps),
+        codecs: rep.codecs || t('dashRepr.unknownCodec'),
+        size,
+      })
     );
   });
   add('');
@@ -924,58 +951,59 @@ function buildDashCopyText(data, sample, sampleError) {
   addAudio(add, data.audio);
 
   const s = data.segments;
-  add('SEGMENT OCH BUFFERT');
-  add(`Presentationstyp: ${s.isLive ? 'Live (dynamic)' : 'VOD (static)'}`);
-  add(`Segmentadressering: ${dashAddressingLabel(s.segmentAddressing)}`);
-  add(`Segmentlängd: ${fmtDuration(s.segmentDurationSec)}`);
-  add(`Antal segment: ${s.segmentCount != null ? fmtInt(s.segmentCount) : '–'}${s.isLive ? ' (uppskattat)' : ''}`);
-  add(`Fönster / DVR-djup: ${fmtDuration(s.windowSeconds)}`);
-  add(`minBufferTime: ${fmtDuration(s.minBufferTimeSec)}`);
-  add(`minimumUpdatePeriod: ${s.minimumUpdatePeriodSec != null ? fmtDuration(s.minimumUpdatePeriodSec) : '–'}`);
-  add(`mediaPresentationDuration: ${fmtDuration(s.mediaPresentationDurationSec)}`);
+  add(t('segments.heading').toUpperCase());
+  add(`${t('dashSegments.presentationType')}: ${s.isLive ? t('dashSegments.live') : t('dashSegments.vod')}`);
+  add(`${t('dashSegments.addressing')}: ${dashAddressingLabel(s.segmentAddressing)}`);
+  add(`${t('dashSegments.length')}: ${fmtDuration(s.segmentDurationSec)}`);
+  add(`${t('dashSegments.count')}: ${s.segmentCount != null ? fmtInt(s.segmentCount) : '–'}${s.isLive ? t('dashSegments.estimated') : ''}`);
+  add(`${t('dashSegments.window')}: ${fmtDuration(s.windowSeconds)}`);
+  add(`${t('dashSegments.minBufferTime')}: ${fmtDuration(s.minBufferTimeSec)}`);
+  add(`${t('dashSegments.minimumUpdatePeriod')}: ${s.minimumUpdatePeriodSec != null ? fmtDuration(s.minimumUpdatePeriodSec) : '–'}`);
+  add(`${t('dashSegments.mediaPresentationDuration')}: ${fmtDuration(s.mediaPresentationDurationSec)}`);
   add(
-    `Kryptering: ${
+    `${t('dashSegments.encryption')}: ${
       (s.contentProtection || []).length
         ? s.contentProtection.map((cp) => `${cp.schemeIdUri || '?'}${cp.value ? ` (${cp.value})` : ''}`).join(', ')
-        : 'Av'
+        : t('dashSegments.off')
     }`
   );
-  add(`Segmentformat: ${s.fmp4 ? 'Fragmenterad MP4 (fMP4)' : 'Inget separat init-segment'}`);
-  if (s.initUri) add(`Init-segment: ${s.initUri}`);
+  add(`${t('dashSegments.format')}: ${s.fmp4 ? t('dashSegments.fmp4') : t('dashSegments.noInit')}`);
+  if (s.initUri) add(`${t('dashSegments.initSegment')}: ${s.initUri}`);
   add('');
 
   const l = data.latency;
-  add('LATENS');
+  add(t('latency.heading').toUpperCase());
   if (!l.available) {
-    add(DASH_NO_LATENCY_REASONS[l.reason] || 'Latens kan inte beräknas.');
+    const reasonKey = `dash.noLatencyReasons.${l.reason}`;
+    add(t(reasonKey) !== reasonKey ? t(reasonKey) : t('dashLatency.unavailable'));
   } else {
-    add(`Beräkningsmetod: ${l.method === 'declared' ? 'Deklarerad i manifestet' : 'Uppskattad från segmentlängd'}`);
-    add(`availabilityStartTime: ${fmtDateTime(l.availabilityStartTime)}${l.epochAnchored ? ' (epoch-förankrad)' : ''}`);
-    add(`publishTime: ${fmtDateTime(l.publishTime)}`);
+    add(`${t('dashLatency.method')}: ${l.method === 'declared' ? t('dashLatency.methodDeclared') : t('dashLatency.methodEstimated')}`);
+    add(`${t('dashLatency.availabilityStartTime')}: ${fmtDateTime(l.availabilityStartTime)}${l.epochAnchored ? t('dashLatency.epochAnchored') : ''}`);
+    add(`${t('dashLatency.publishTime')}: ${fmtDateTime(l.publishTime)}`);
     add(
-      `Manifestets ålder: ${
-        l.manifestAgeSec != null ? fmtDuration(l.manifestAgeSec) : l.epochAnchored ? 'ej tillgänglig (epoch)' : '–'
+      `${t('dashLatency.manifestAge')}: ${
+        l.manifestAgeSec != null ? fmtDuration(l.manifestAgeSec) : l.epochAnchored ? t('dashLatency.manifestAgeUnavailableCopy') : '–'
       }`
     );
-    add(`suggestedPresentationDelay: ${l.suggestedPresentationDelaySec != null ? fmtDuration(l.suggestedPresentationDelaySec) : 'Hittades inte'}`);
-    add(`Uppskattad live-fördröjning: ${fmtDuration(l.estimatedLiveDelaySec)}${l.method === 'estimated' ? ' (grov)' : ''}`);
-    add(`timeShiftBufferDepth: ${fmtDuration(l.timeShiftBufferDepthSec)}`);
+    add(`${t('dashLatency.suggestedDelay')}: ${l.suggestedPresentationDelaySec != null ? fmtDuration(l.suggestedPresentationDelaySec) : t('common.notFound')}`);
+    add(`${t('dashLatency.estimatedDelay')}: ${fmtDuration(l.estimatedLiveDelaySec)}${l.method === 'estimated' ? t('dashLatency.estimatedSuffix') : ''}`);
+    add(`${t('dashLatency.timeShiftBufferDepth')}: ${fmtDuration(l.timeShiftBufferDepthSec)}`);
   }
   add('');
 
   const b = data.bitrate;
-  add('UPPMÄTT BITRATE');
-  add(`Snitt (uppmätt): ${b.averageMeasuredBitrateKbps ? fmtNumber(b.averageMeasuredBitrateKbps) + ' kbit/s' : '–'}`);
-  add(`Deklarerad bandbredd: ${b.declaredBandwidthKbps ? fmtNumber(b.declaredBandwidthKbps) + ' kbit/s' : 'okänd'}`);
+  add(t('bitrate.heading').toUpperCase());
+  add(`${t('bitrate.average')}: ${b.averageMeasuredBitrateKbps ? fmtNumber(b.averageMeasuredBitrateKbps) + ' kbit/s' : '–'}`);
+  add(`${t('bitrate.declared')}: ${b.declaredBandwidthKbps ? fmtNumber(b.declaredBandwidthKbps) + ' kbit/s' : t('bitrate.declaredUnknownCopy')}`);
   if (b.samples?.length) {
-    add('Uppmätta segmentprov (storlek, bitrate):');
+    add(t('bitrate.samplesIntroDash'));
     b.samples.forEach((samp) => {
-      add(`  ${samp.ok ? fmtInt(samp.bytes) + ' B  ' + fmtNumber(samp.bitrateKbps) + ' kbit/s' : 'misslyckades'}  ${samp.uri}`);
+      add(`  ${samp.ok ? fmtInt(samp.bytes) + ' B  ' + fmtNumber(samp.bitrateKbps) + ' kbit/s' : t('bitrate.failed')}  ${samp.uri}`);
     });
   }
   add('');
 
-  addSample(add, sample, sampleError, 'NU SPELAS (ID3)');
+  addSample(add, sample, sampleError, t('id3.heading').toUpperCase());
   addWarnings(add, data.errors);
 
   return lines.join('\n');
@@ -987,55 +1015,55 @@ function buildIcecastCopyText(data, sample, sampleError) {
   const lines = [];
   const add = (line = '') => lines.push(line);
 
-  add(`Strömanalys (Icecast/radio): ${data.requestedUrl}`);
-  add(`Genererad: ${fmtDateTime(new Date().toISOString())}`);
+  add(t('flow.streamAnalysisIcecast', { url: data.requestedUrl }));
+  add(t('flow.generated', { timestamp: fmtDateTime(new Date().toISOString()) }));
   add('');
 
   addConnection(add, data.connection);
 
   const st = data.station || {};
-  add('STATION');
-  add(`Namn: ${st.name || '–'}`);
+  add(t('icecastStation.heading').toUpperCase());
+  add(`${t('icecastStation.name')}: ${st.name || '–'}`);
   add(
-    `Nu spelas: ${
-      st.nowPlaying || (st.icyMetadataSupported ? '(inget titelblock hann skickas)' : '(strömmen skickar ingen låttitel)')
+    `${t('icecastStation.nowPlaying')}: ${
+      st.nowPlaying || (st.icyMetadataSupported ? t('icecastStation.metadataPendingCopy') : t('icecastStation.metadataOffCopy'))
     }`
   );
-  add(`Genre: ${st.genre || '–'}`);
-  add(`Beskrivning: ${st.description || '–'}`);
-  add(`Hemsida: ${st.homepageUrl || '–'}`);
-  add(`Deklarerad bitrate: ${st.declaredBitrateKbps ? fmtInt(st.declaredBitrateKbps) + ' kbit/s' : '–'}`);
-  add(`Deklarerad samplingsfrekvens: ${st.declaredSampleRateHz ? fmtInt(st.declaredSampleRateHz) + ' Hz' : '–'}`);
+  add(`${t('icecastStation.genre')}: ${st.genre || '–'}`);
+  add(`${t('icecastStation.description')}: ${st.description || '–'}`);
+  add(`${t('icecastStation.homepage')}: ${st.homepageUrl || '–'}`);
+  add(`${t('icecastStation.declaredBitrate')}: ${st.declaredBitrateKbps ? fmtInt(st.declaredBitrateKbps) + ' kbit/s' : '–'}`);
+  add(`${t('icecastStation.declaredSampleRate')}: ${st.declaredSampleRateHz ? fmtInt(st.declaredSampleRateHz) + ' Hz' : '–'}`);
   if (st.audioInfo) add(`ice-audio-info: ${st.audioInfo}`);
-  add(`Serverprogramvara: ${st.serverSoftware || '–'}`);
-  add(`Publikt listad: ${st.isPublic ? 'Ja' : 'Nej'}`);
-  add(`In-stream-metadata: ${st.icyMetadataSupported ? `Ja (var ${fmtInt(st.metaIntBytes)} byte)` : 'Nej'}`);
-  if (st.rawMetaBlock) add(`Rått metadatablock: ${st.rawMetaBlock}`);
+  add(`${t('icecastStation.serverSoftware')}: ${st.serverSoftware || '–'}`);
+  add(`${t('icecastStation.publiclyListed')}: ${yesNo(st.isPublic)}`);
+  add(`${t('icecastStation.inStreamMetadata')}: ${st.icyMetadataSupported ? t('icecastStation.inStreamMetadataYesCopy', { metaInt: fmtInt(st.metaIntBytes) }) : t('common.no')}`);
+  if (st.rawMetaBlock) add(`${t('icecastStation.rawMetaBlock').replace(/:$/, '')}: ${st.rawMetaBlock}`);
   add('');
 
   addAudio(add, data.audio);
   addNetworkPath(add, data.networkPath);
 
-  add('LJUDPROV');
+  add(t('icecastSample.heading').toUpperCase());
   if (sampleError) {
-    add(`Kunde inte hämtas: ${sampleError.message}`);
+    add(t('id3.fetchFailed', { message: sampleError.message }));
   } else if (sample) {
-    (sample.warnings || []).forEach((w) => add(`OBS: ${w.message}`));
-    add(`Uppmätt bitrate: ${sample.measuredBitrateKbps ? fmtNumber(sample.measuredBitrateKbps) + ' kbit/s' : '–'}`);
-    add(`Inspelad längd: ${fmtDuration(sample.actualDurationSec)}`);
+    (sample.warnings || []).forEach((w) => add(t('warnings.prefix', { message: errorText(w) })));
+    add(`${t('icecastSample.average')}: ${sample.measuredBitrateKbps ? fmtNumber(sample.measuredBitrateKbps) + ' kbit/s' : '–'}`);
+    add(`${t('icecastSample.recordedLength')}: ${fmtDuration(sample.actualDurationSec)}`);
     add(
-      `Serverbuffert vid anslutning: ${
+      `${t('icecastSample.connectBurst')}: ${
         typeof sample.connectBurstSec !== 'number' || sample.connectBurstSec < 1
-          ? 'ingen märkbar (realtid)'
-          : `${sample.burstIsLowerBound ? 'minst ' : '≈ '}${fmtDuration(sample.connectBurstSec)}`
+          ? t('icecastSample.burstNoneCopy')
+          : t(sample.burstIsLowerBound ? 'icecastSample.burstAtLeast' : 'icecastSample.burstApprox', { seconds: fmtDuration(sample.connectBurstSec) })
       }`
     );
-    add(`Provets storlek: ${sample.fileSizeBytes ? fmtInt(sample.fileSizeBytes) + ' byte' : '–'}`);
+    add(`${t('icecastSample.sampleSize')}: ${sample.fileSizeBytes ? fmtInt(sample.fileSizeBytes) + ' byte' : '–'}`);
     if (sample.id3 && sample.id3.available) {
       sample.id3.frames.forEach((f) => add(`  ID3 ${fmtDuration(f.ptsTime)}: ${JSON.stringify(f.tags)}`));
     }
   } else {
-    add('Hämtades inte (analysen avbröts eller väntar fortfarande).');
+    add(t('icecastSample.notFetched'));
   }
 
   addWarnings(add, data.errors);
@@ -1060,57 +1088,9 @@ let currentMasterUrl = null;
 let currentAnalyzedUrl = null;
 let baseVariantsInfo = null;
 
-async function runAnalysis(targetUrl, { isVariantSwitch = false } = {}) {
-  // A running log owns #results and keeps writing to it every 15 seconds. Analysing
-  // without stopping it first would have the two overwrite each other. claimResults()
-  // below handles a log that is still *starting*; this stops one already polling.
-  if (typeof stopStreamLog === 'function') stopStreamLog();
-
-  // Disabling the Analyze button does not stop a variant row from being clicked, and
-  // the sample phase alone runs 8-20 s - so two runs could overlap, and the log and
-  // file views can take over mid-flight too. See claimResults() in shared.js.
-  const myToken = claimResults();
-  const isStale = () => !ownsResults(myToken);
-
-  if (faqEl) faqEl.open = false; // collapse the FAQ so it never buries the results
-  analyzeBtn.disabled = true;
-  lastAnalyzeData = null;
-  lastSampleData = null;
-  lastSampleError = null;
-  statusEl.textContent = 'Analyserar…';
-  resultsEl.innerHTML = '';
-
-  currentAnalyzedUrl = targetUrl;
-  // The non-variant case needs nothing: claimResults() already cleared and hid this.
-  if (isVariantSwitch) {
-    analyzedUrlInfoEl.innerHTML = `Master: <span class="mono">${esc(currentMasterUrl)}</span> → Analyserar: <span class="mono">${esc(targetUrl)}</span>`;
-    analyzedUrlInfoEl.hidden = false;
-  }
-
-  let data;
-  try {
-    const res = await fetch('/api/analyze', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url: targetUrl }),
-    });
-    const body = await res.json();
-    if (isStale()) return;
-    if (!res.ok) {
-      resultsEl.innerHTML = renderFatalError(body.error);
-      statusEl.textContent = '';
-      analyzeBtn.disabled = false;
-      return;
-    }
-    data = body;
-  } catch (err) {
-    if (isStale()) return;
-    resultsEl.innerHTML = renderFatalError({ message: 'Kunde inte nå servern: ' + err.message, details: {} });
-    statusEl.textContent = '';
-    analyzeBtn.disabled = false;
-    return;
-  }
-
+// The streamKind dispatch, extracted so both runAnalysis() and the onLocaleChange
+// handler below can re-render the same result without redoing any network requests.
+function renderResults(data) {
   if (data.streamKind === 'dash') {
     resultsEl.innerHTML =
       renderAnalysisControls() +
@@ -1134,9 +1114,6 @@ async function runAnalysis(targetUrl, { isVariantSwitch = false } = {}) {
       renderAudio(data.audio) +
       renderIcecastSamplePlaceholder();
   } else {
-    if (!isVariantSwitch) {
-      baseVariantsInfo = data.variants;
-    }
     resultsEl.innerHTML =
       renderAnalysisControls() +
       renderWarnings(data.errors) +
@@ -1150,18 +1127,75 @@ async function runAnalysis(targetUrl, { isVariantSwitch = false } = {}) {
       renderId3Placeholder() +
       renderManifests(data.manifests);
   }
+}
+
+async function runAnalysis(targetUrl, { isVariantSwitch = false } = {}) {
+  // A running log owns #results and keeps writing to it every 15 seconds. Analysing
+  // without stopping it first would have the two overwrite each other. claimResults()
+  // below handles a log that is still *starting*; this stops one already polling.
+  if (typeof stopStreamLog === 'function') stopStreamLog();
+
+  // Disabling the Analyze button does not stop a variant row from being clicked, and
+  // the sample phase alone runs 8-20 s - so two runs could overlap, and the log and
+  // file views can take over mid-flight too. See claimResults() in shared.js.
+  const myToken = claimResults('analyze');
+  const isStale = () => !ownsResults(myToken);
+
+  if (faqEl) faqEl.open = false; // collapse the FAQ so it never buries the results
+  analyzeBtn.disabled = true;
+  lastAnalyzeData = null;
+  lastSampleData = null;
+  lastSampleError = null;
+  statusEl.textContent = t('flow.analyzing');
+  resultsEl.innerHTML = '';
+
+  currentAnalyzedUrl = targetUrl;
+  // The non-variant case needs nothing: claimResults() already cleared and hid this.
+  if (isVariantSwitch) {
+    analyzedUrlInfoEl.innerHTML = t('flow.analyzedFrom', { master: esc(currentMasterUrl), target: esc(targetUrl) });
+    analyzedUrlInfoEl.hidden = false;
+  }
+
+  let data;
+  try {
+    const res = await fetch('/api/analyze', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: targetUrl }),
+    });
+    const body = await res.json();
+    if (isStale()) return;
+    if (!res.ok) {
+      resultsEl.innerHTML = renderFatalError(body.error);
+      statusEl.textContent = '';
+      analyzeBtn.disabled = false;
+      return;
+    }
+    data = body;
+  } catch (err) {
+    if (isStale()) return;
+    resultsEl.innerHTML = renderFatalError({ message: t('error.serverUnreachable', { message: err.message }), details: {} });
+    statusEl.textContent = '';
+    analyzeBtn.disabled = false;
+    return;
+  }
+
+  if (data.streamKind !== 'dash' && data.streamKind !== 'icecast' && !isVariantSwitch) {
+    baseVariantsInfo = data.variants;
+  }
+  renderResults(data);
 
   lastAnalyzeData = data;
   setCopyEnabled(true);
 
   const isIcecast = data.streamKind === 'icecast';
-  statusEl.textContent = isIcecast ? 'Spelar in ljudprov…' : 'Hämtar nu spelas…';
+  statusEl.textContent = isIcecast ? t('flow.recordingSample') : t('flow.fetchingNowPlaying');
   const sampleSection = document.getElementById(isIcecast ? 'sec-icecast-sample' : 'sec-id3');
   const renderSample = (body, error) =>
     isIcecast ? renderIcecastSample(body, error) : renderId3(body, error);
   const sampleTarget = data.sampleUrl || data.variants?.chosenVariantUrl;
   if (!sampleTarget) {
-    sampleSection.innerHTML = renderSample(null, { message: 'Ingen URL att spela in ett prov från.' });
+    sampleSection.innerHTML = renderSample(null, { message: t('id3.noUrl') });
   } else {
     try {
       const sampleUrl = '/api/sample?url=' + encodeURIComponent(sampleTarget) + '&secs=8';
@@ -1177,7 +1211,7 @@ async function runAnalysis(targetUrl, { isVariantSwitch = false } = {}) {
       }
     } catch (err) {
       if (isStale()) return;
-      const fetchError = { message: 'Kunde inte nå servern: ' + err.message };
+      const fetchError = { message: t('error.serverUnreachable', { message: err.message }) };
       sampleSection.innerHTML = renderSample(null, fetchError);
       lastSampleError = fetchError;
     }
@@ -1198,7 +1232,7 @@ if (logBtn) {
   logBtn.addEventListener('click', () => {
     const url = urlInput.value.trim();
     if (!url) {
-      statusEl.textContent = 'Ange en URL först.';
+      statusEl.textContent = t('controls.enterUrlFirst');
       return;
     }
     // Same page, same results area as Analysera - the log takes over #results and
@@ -1219,7 +1253,7 @@ form.addEventListener('submit', (event) => {
   event.preventDefault();
   const url = urlInput.value.trim();
   if (!url) {
-    statusEl.textContent = 'Ange en URL först.';
+    statusEl.textContent = t('controls.enterUrlFirst');
     return;
   }
   currentMasterUrl = url;
@@ -1248,9 +1282,26 @@ resultsEl.addEventListener('click', async (event) => {
   const originalLabel = btn.textContent;
   try {
     await navigator.clipboard.writeText(text);
-    btn.textContent = 'Kopierat!';
+    btn.textContent = t('controls.copied');
   } catch (err) {
-    btn.textContent = 'Kunde inte kopiera';
+    btn.textContent = t('controls.copyFailed');
   }
   setTimeout(() => { btn.textContent = originalLabel; }, 1500);
+});
+
+// A language switch re-renders this view in place from cached data instead of
+// reloading the page - see setLocale()/onLocaleChange() in i18n.js and
+// claimResults(owner)/currentResultsOwner() in shared.js. No-op if this view
+// doesn't currently own #results, or there's nothing rendered yet to redo.
+onLocaleChange(() => {
+  if (currentResultsOwner() !== 'analyze' || !lastAnalyzeData) return;
+  renderResults(lastAnalyzeData);
+  setCopyEnabled(true);
+  const isIcecast = lastAnalyzeData.streamKind === 'icecast';
+  const sampleSection = document.getElementById(isIcecast ? 'sec-icecast-sample' : 'sec-id3');
+  if (sampleSection) {
+    sampleSection.innerHTML = isIcecast
+      ? renderIcecastSample(lastSampleData, lastSampleError)
+      : renderId3(lastSampleData, lastSampleError);
+  }
 });
