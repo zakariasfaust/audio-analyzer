@@ -31,6 +31,52 @@ export async function getManifest(url, { signal } = {}) {
 }
 
 /**
+ * Picks which part of a master playlist to treat as "the media playlist" to
+ * fetch and probe for audio. Mirrors chooseDashAudioRepresentation()'s shape
+ * and fallback philosophy (server/dash.js): a pure function of the parsed
+ * master, never throws, null only when there is truly nothing to analyze.
+ *
+ * Priority:
+ *  1. A variant with no RESOLUTION - an explicit audio-only rung of the
+ *     bitrate ladder. Its own segments are guaranteed audio-only.
+ *  2. A declared #EXT-X-MEDIA audio rendition (DEFAULT=YES preferred, else
+ *     the first) - covers a master whose every video-resolution variant is
+ *     muxed with nothing *but* a demuxed audio group to fall back to.
+ *     Skipped if the chosen rendition has no URI (audio is embedded directly
+ *     in the variants - nothing separate to fetch).
+ *  3. variants[0] - status quo. Most real single-ladder streams mux audio
+ *     into every variant, so simplifyProbeResult() already extracts the
+ *     right thing; this only overrides the default when a strictly-better
+ *     audio-only option genuinely exists.
+ */
+export function chooseHlsAudioSource(masterParsed) {
+  const { variants = [], audioRenditions = [] } = masterParsed;
+
+  const audioOnlyVariant = variants.find((v) => !v.resolution);
+  if (audioOnlyVariant) return { ...audioOnlyVariant, source: 'variant' };
+
+  if (audioRenditions.length) {
+    const rendition = audioRenditions.find((r) => r.isDefault) || audioRenditions[0];
+    if (rendition.uri) {
+      return {
+        url: rendition.uri,
+        bandwidth: null,
+        averageBandwidth: null,
+        codecs: null,
+        resolution: null,
+        audioGroup: rendition.groupId,
+        source: 'audio-rendition',
+        language: rendition.language,
+        name: rendition.name,
+      };
+    }
+  }
+
+  if (variants.length) return { ...variants[0], source: 'variant' };
+  return null;
+}
+
+/**
  * Follows any master playlist down to a concrete media playlist (with segments).
  * Radio streams often lack the master layer entirely - in that case media is returned directly.
  */
@@ -49,8 +95,8 @@ export async function resolveMediaPlaylist(url, { signal } = {}) {
       i18nKey: 'errors.hlsNoVariants',
     });
   }
-  const chosenVariant = variants[0];
-  if (!chosenVariant.url) {
+  const chosenVariant = chooseHlsAudioSource(manifest.parsed);
+  if (!chosenVariant?.url) {
     throw new InvalidManifestError(url, null, {
       message: 'Could not find a variant URL in the master playlist.',
       i18nKey: 'errors.hlsNoVariantUrl',
@@ -282,6 +328,7 @@ export async function analyzeHls(url, { signal, connection: prefetched } = {}) {
       list: variants,
       singleVariantNote: !master || variants.length <= 1,
       chosenVariantUrl,
+      chosenSource: chosenVariant?.source || null, // 'variant' | 'audio-rendition' | null
     },
     audio,
     segments,

@@ -420,8 +420,8 @@ registerCatalog('en', {
     analyzeBtn: 'Analyze',
     logBtn: 'Log',
     logBtnTitle: 'Follow the stream over time instead of taking a snapshot',
-    fileRowPrefix: 'or analyze an audio file:',
-    filePick: 'Choose audio file…',
+    fileRowPrefix: 'or analyze an audio or video file (only the audio is analyzed):',
+    filePick: 'Choose audio or video file…',
   },
 
   faq: {
@@ -458,7 +458,8 @@ registerCatalog('en', {
         bit depth, sample rate, tags, cover art, chapters), loudness (LUFS) and true peak
         as a curve across the whole file, dynamics (LRA, crest factor, clipping), stereo
         image and phase, and a spectrogram – where a razor-sharp edge high up reveals a
-        file made from a lossy source (e.g. an MP3 re-encoded to FLAC).`,
+        file made from a lossy source (e.g. an MP3 re-encoded to FLAC). A video file (e.g.
+        mp4, mov, mkv) works just as well – only the audio track is analyzed.`,
     fileBody2: "The file is uploaded to the tool's server, analyzed with ffmpeg and not saved.",
     loggingSummary: 'How does logging work?',
     loggingBody1: `Logging records 15 seconds of audio, measures loudness (LUFS, True Peak)

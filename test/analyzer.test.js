@@ -12,6 +12,7 @@ import {
   computeContinuityInfo,
   computeLatency,
   computeLowLatencyInfo,
+  chooseHlsAudioSource,
 } from '../server/hls.js';
 import { computeNetworkPath } from '../server/networkPath.js';
 import {
@@ -193,6 +194,82 @@ test('computeNetworkPath keeps only routing headers and extracts an airport-code
 
   assert.equal(computeNetworkPath({ server: 'nginx' }).geoHint, null);
   assert.deepEqual(computeNetworkPath(null).headers, {});
+});
+
+// --------------------------------------------------------------------------
+// HLS audio-source choice (mirrors the DASH chooser tests just below)
+// --------------------------------------------------------------------------
+
+test('chooseHlsAudioSource prefers an explicit audio-only variant over a muxed video+audio one', () => {
+  const master = {
+    variants: [
+      { resolution: '1920x1080', bandwidth: 5000000, url: 'https://cdn.example.com/video.m3u8' },
+      { resolution: null, bandwidth: 128000, url: 'https://cdn.example.com/audio-only.m3u8' },
+    ],
+    audioRenditions: [],
+  };
+  const chosen = chooseHlsAudioSource(master);
+  assert.equal(chosen.url, 'https://cdn.example.com/audio-only.m3u8');
+  assert.equal(chosen.source, 'variant');
+});
+
+test('regression: a fully demuxed master falls back to the DEFAULT audio rendition, not a video-only variant', () => {
+  // No variant lacks RESOLUTION - a live-TV-style ladder with audio provided purely
+  // via EXT-X-MEDIA groups. variants[0] has no audio in its own segments at all;
+  // runFfprobe against it used to silently report audio: null.
+  const master = {
+    variants: [
+      { resolution: '1920x1080', bandwidth: 5000000, audioGroup: 'aac', url: 'https://cdn.example.com/1080p.m3u8' },
+      { resolution: '1280x720', bandwidth: 2500000, audioGroup: 'aac', url: 'https://cdn.example.com/720p.m3u8' },
+    ],
+    audioRenditions: [
+      { groupId: 'aac', name: 'English', language: 'en', isDefault: false, uri: 'https://cdn.example.com/audio-en.m3u8' },
+      { groupId: 'aac', name: 'Svenska', language: 'sv', isDefault: true, uri: 'https://cdn.example.com/audio-sv.m3u8' },
+    ],
+  };
+  const chosen = chooseHlsAudioSource(master);
+  assert.equal(chosen.url, 'https://cdn.example.com/audio-sv.m3u8');
+  assert.equal(chosen.source, 'audio-rendition');
+  assert.equal(chosen.language, 'sv');
+  assert.equal(chosen.bandwidth, null);
+});
+
+test('chooseHlsAudioSource picks the first audio rendition when none is DEFAULT=YES', () => {
+  const master = {
+    variants: [{ resolution: '1920x1080', url: 'https://cdn.example.com/1080p.m3u8' }],
+    audioRenditions: [
+      { groupId: 'aac', name: 'English', language: 'en', isDefault: false, uri: 'https://cdn.example.com/audio-en.m3u8' },
+      { groupId: 'aac', name: 'Svenska', language: 'sv', isDefault: false, uri: 'https://cdn.example.com/audio-sv.m3u8' },
+    ],
+  };
+  assert.equal(chooseHlsAudioSource(master).url, 'https://cdn.example.com/audio-en.m3u8');
+});
+
+test('chooseHlsAudioSource falls back to variants[0] when every variant is muxed and there are no audio renditions (status quo)', () => {
+  const master = {
+    variants: [
+      { resolution: '1920x1080', bandwidth: 5000000, url: 'https://cdn.example.com/1080p.m3u8' },
+      { resolution: '1280x720', bandwidth: 2500000, url: 'https://cdn.example.com/720p.m3u8' },
+    ],
+    audioRenditions: [],
+  };
+  const chosen = chooseHlsAudioSource(master);
+  assert.equal(chosen.url, 'https://cdn.example.com/1080p.m3u8');
+  assert.equal(chosen.source, 'variant');
+});
+
+test('chooseHlsAudioSource falls back to variants[0] when the only audio rendition has no URI', () => {
+  // DEFAULT=YES but no URI: audio is embedded directly in the variant streams
+  // themselves (valid HLS) - nothing separate to fetch, so variants[0] is correct.
+  const master = {
+    variants: [{ resolution: '1920x1080', url: 'https://cdn.example.com/1080p.m3u8' }],
+    audioRenditions: [{ groupId: 'aac', isDefault: true, uri: null }],
+  };
+  assert.equal(chooseHlsAudioSource(master).source, 'variant');
+});
+
+test('chooseHlsAudioSource returns null only when there is truly nothing to analyze', () => {
+  assert.equal(chooseHlsAudioSource({ variants: [], audioRenditions: [] }), null);
 });
 
 // --------------------------------------------------------------------------

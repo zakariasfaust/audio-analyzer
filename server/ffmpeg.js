@@ -684,6 +684,11 @@ export async function measureFileLoudness(filePath, { signal, durationSec = null
     '-protocol_whitelist', 'file',
     '-t', String(FILE_ANALYSIS_MAX_SECONDS),
     '-i', filePath,
+    // A video track riding along (an uploaded .mp4/.mov) would otherwise still be
+    // auto-selected and decoded by ffmpeg even though -f null discards it - wasted
+    // time against FILE_ANALYSIS_TIMEOUT_MS. -vn drops only that demux/decode; it
+    // cannot affect the retained audio stream's channel count or layout.
+    '-vn',
     // framelog=info (not quiet): we want the ~100ms lines for the curve. peak has
     // both sample and true so parseEbur128Summary's anchoring matters.
     '-af',

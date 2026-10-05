@@ -422,8 +422,8 @@ registerCatalog('sv', {
     analyzeBtn: 'Analysera',
     logBtn: 'Logga',
     logBtnTitle: 'Följ strömmen över tid i stället för att ta en ögonblicksbild',
-    fileRowPrefix: 'eller analysera en ljudfil:',
-    filePick: 'Välj ljudfil…',
+    fileRowPrefix: 'eller analysera en ljud- eller videofil (bara ljudet analyseras):',
+    filePick: 'Välj ljud- eller videofil…',
   },
 
   faq: {
@@ -460,7 +460,8 @@ registerCatalog('sv', {
         samplingsfrekvens, taggar, omslagsbild, kapitel), ljudnivå (LUFS) och true peak
         som en kurva över hela filen, dynamik (LRA, crest factor, klippning), stereobild
         och fas, samt ett spektrogram – där en spikrak kant högt upp avslöjar en fil som
-        gjorts från en lossy källa (t.ex. en MP3 omkodad till FLAC).`,
+        gjorts från en lossy källa (t.ex. en MP3 omkodad till FLAC). En videofil (t.ex. mp4,
+        mov, mkv) går lika bra att ladda upp – det är bara ljudspåret som analyseras.`,
     fileBody2: 'Filen laddas upp till verktygets server, analyseras med ffmpeg och sparas inte.',
     loggingSummary: 'Hur fungerar loggningen?',
     loggingBody1: `Loggningen spelar in 15 sekunder av ljudet, mäter ljudnivå (LUFS, True Peak)
