@@ -7,7 +7,7 @@
 # helst, så en Node-säkerhetspatch ska bli en synlig PR (Dependabot, se
 # .github/dependabot.yml) som når produktion när den mergas - inte något som bara
 # råkar följa med nästa gång någon pushar.
-FROM node:24.22.1-alpine
+FROM node:26.12.0-alpine
 
 RUN apk add --no-cache ffmpeg
 
