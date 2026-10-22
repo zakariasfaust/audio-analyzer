@@ -1,0 +1,31 @@
+# Dependabot version updates: a weekly look for newer versions of what this project
+# depends on, each found update opened as a pull request (which test.yml then runs the
+# test suite against). Separate from Dependabot *security* updates, which are switched
+# on in the repo settings and open a PR as soon as an advisory lands, whatever this
+# file says.
+version: 2
+updates:
+  # npm packages. Minor and patch bumps land together in one PR so a quiet week is one
+  # PR, not five; a major bump still gets its own, since that is a decision to make
+  # (express 4 -> 5 is not a drop-in change), not a routine merge.
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      minor-and-patch:
+        update-types: [minor, patch]
+
+  # The Node base image in the Dockerfile. It is pinned to an exact version, so every
+  # Node release - security patches included - arrives here as a PR, and reaches
+  # production when that PR is merged.
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+
+  # actions/checkout, actions/setup-node and friends in .github/workflows/.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

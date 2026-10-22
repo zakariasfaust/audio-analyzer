@@ -3,7 +3,11 @@
 # CVE:er i basen. Inga av projektets npm-paket har native bindings, så musl libc
 # (Alpines C-bibliotek, i stället för Debians glibc) kräver ingen extra
 # kompilatorkedja här. Railway väljer denna framför Nixpacks/Railpack.
-FROM node:24-alpine
+# Exakt version, inte flytande `node:24-alpine`: appen hämtar URL:er från vem som
+# helst, så en Node-säkerhetspatch ska bli en synlig PR (Dependabot, se
+# .github/dependabot.yml) som når produktion när den mergas - inte något som bara
+# råkar följa med nästa gång någon pushar.
+FROM node:24.22.1-alpine
 
 RUN apk add --no-cache ffmpeg
 
