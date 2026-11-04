@@ -428,7 +428,9 @@ registerCatalog('sv', {
 
   faq: {
     summary: 'Om verktyget',
-    intro: `Audio analyzer hämtar och analyserar en ljudström: anslutning och CORS, ljudkodek,
+    intro: `Audio analyzer analyserar ljud från strömmar (radio, HLS och DASH – även
+      videoströmmar) och från uppladdade ljud- eller videofiler. Vid video analyseras
+      bara ljudet, bilden ignoreras. För en ström visas anslutning och CORS, ljudkodek,
       segment och buffert, latens, uppmätt bitrate, "nu spelas" och det råa manifestet.
       Välj <strong>Analysera</strong> för en nulägesbild med alla metadata eller <strong>Logga</strong> för att
       i stället följa strömmens ljudnivå över tid.

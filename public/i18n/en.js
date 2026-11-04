@@ -426,8 +426,11 @@ registerCatalog('en', {
 
   faq: {
     summary: 'About this tool',
-    intro: `Audio analyzer fetches and analyzes an audio stream: connection and CORS, audio codec,
-      segments and buffer, latency, measured bitrate, "now playing" and the raw manifest.
+    intro: `Audio analyzer analyzes audio from streams (radio, HLS and DASH – including
+      video streams) and from uploaded audio or video files. For video, only the audio
+      is analyzed; the picture is ignored. For a stream it shows connection and CORS,
+      audio codec, segments and buffer, latency, measured bitrate, "now playing" and
+      the raw manifest.
       Choose <strong>Analyze</strong> for a snapshot with all metadata, or <strong>Log</strong> to
       follow the stream's loudness over time instead.
       Fetches happen on the server (CDNs rarely send CORS headers), and the audio is

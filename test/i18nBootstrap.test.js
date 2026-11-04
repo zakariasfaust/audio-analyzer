@@ -97,7 +97,7 @@ test('translations are not applied before DOMContentLoaded, and are applied once
   assert.equal(elements.analyzeBtn.textContent, 'Analysera');
   assert.equal(elements.urlInput.getAttribute('placeholder'), 'Ström-URL – HLS, DASH eller Icecast/radio');
   assert.equal(elements.logBtn.getAttribute('title'), 'Följ strömmen över tid i stället för att ta en ögonblicksbild');
-  assert.match(elements.faqIntro.innerHTML, /Audio analyzer hämtar och analyserar en ljudström/);
+  assert.match(elements.faqIntro.innerHTML, /Audio analyzer analyserar ljud från strömmar/);
 });
 
 test('switching language re-applies every data-i18n* variant, including data-i18n-html', () => {
@@ -119,7 +119,7 @@ test('switching language re-applies every data-i18n* variant, including data-i18
   assert.equal(elements.analyzeBtn.textContent, 'Analyze');
   assert.equal(elements.urlInput.getAttribute('placeholder'), 'Stream URL – HLS, DASH or Icecast/radio');
   assert.equal(elements.logBtn.getAttribute('title'), 'Follow the stream over time instead of taking a snapshot');
-  assert.match(elements.faqIntro.innerHTML, /Audio analyzer fetches and analyzes an audio stream/);
+  assert.match(elements.faqIntro.innerHTML, /Audio analyzer analyzes audio from streams/);
   assert.equal(document.documentElement.lang, 'en');
   assert.equal(elements.switcher.value, 'en');
 });
