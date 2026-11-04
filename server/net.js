@@ -73,7 +73,10 @@ export function validateUrl(raw) {
 // two the up-front check is the only layer - which is why they pass failClosed.
 const PUBLIC_IP_RANGES = new Set(['unicast']);
 
-function isPublicAddress(ip) {
+// Exported for its test: the range table it relies on lives inside ipaddr.js, so a
+// library upgrade can change which addresses count as public without a line of ours
+// changing.
+export function isPublicAddress(ip) {
   let range;
   try {
     range = ipaddr.process(ip).range();

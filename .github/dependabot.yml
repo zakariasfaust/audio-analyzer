@@ -18,11 +18,18 @@ updates:
 
   # The Node base image in the Dockerfile. It is pinned to an exact version, so every
   # Node release - security patches included - arrives here as a PR, and reaches
-  # production when that PR is merged.
+  # production when that PR is merged. Major versions are ignored: once a newer major
+  # exists Dependabot proposes only that, and the patches for the major we run never
+  # show up (Node 24.22.2 was skipped in favour of 26.x exactly that way). Moving to a
+  # new Node major is a decision, made by hand. A new base image also re-runs the
+  # `apk add ffmpeg` layer, which is how ffmpeg updates reach production.
   - package-ecosystem: docker
     directory: /
     schedule:
       interval: weekly
+    ignore:
+      - dependency-name: node
+        update-types: [version-update:semver-major]
 
   # actions/checkout, actions/setup-node and friends in .github/workflows/.
   - package-ecosystem: github-actions
